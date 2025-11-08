@@ -1,4 +1,5 @@
 import React, { useRef, useCallback, useState } from 'react';
+
 import Webcam from 'react-webcam';
 
 // Constraint to prioritize the environment (back) camera on mobile

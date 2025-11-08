@@ -1,7 +1,47 @@
 import { useState, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
 import './App.css';
-import { CameraCapture } from './CameraCapture'; 
+import { CameraCapture } from './CameraCapture'; // Assuming CameraCapture is available
+import {GoogleGenAI} from '@google/genai';
+
+// --- Gemini AI Setup ---
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Check if the key is available
+if (!apiKey) {
+  // Use console.error instead of throw new Error to avoid stopping React refresh
+  console.error("VITE_GEMINI_API_KEY is not set in .env.local");
+}
+
+const ai = new GoogleGenAI({ apiKey });
+
+// Define the desired structured output schema for item name and count
+const ingredientSchema = {
+  type: "object",
+  properties: {
+    groceries: {
+      type: "array",
+      description: "A list of all individual grocery items detected in the image.",
+      items: {
+        type: "object",
+        properties: {
+          item_name: {
+            type: "string",
+            description: "The common name of the detected ingredient or grocery product (e.g., 'Gala Apple', 'Can of Black Beans', 'Dozen Eggs').",
+          },
+          item_count: {
+            type: "number",
+            description: "The quantity or count of the specific item detected (e.g., 3 for 3 apples, 1 for 1 box of cereal).",
+          },
+        },
+        required: ["item_name", "item_count"],
+      },
+    },
+  },
+  required: ["groceries"],
+};
+// ------------------------------------------
+
 
 // --- CONSTANTS (DUMMY DATA) ---
 const ingredientLibrary = [
@@ -62,7 +102,12 @@ const inventory = [
 
 // --- PAGE COMPONENTS ---
 
-function CapturePage({ handleImageCapture, handleCloseImport, capturedImageBase64, importMode, setImportMode, fileInputRef, handleFileUpload, ingredientLibrary }) {
+function CapturePage({ 
+    handleImageCapture, handleCloseImport, capturedImageBase64, 
+    importMode, setImportMode, fileInputRef, handleFileUpload, ingredientLibrary,
+    // PASSED GEMINI PROPS:
+    detectIngredients, detectedResults, isDetecting, detectionError 
+}) {
     return (
         <>
             <header className="hero">
@@ -91,6 +136,18 @@ function CapturePage({ handleImageCapture, handleCloseImport, capturedImageBase6
                     <button type="button" onClick={() => setImportMode('camera')}>📸 Take Photo</button>
                     <button type="button" onClick={() => fileInputRef.current.click()}>📂 Upload Photo</button>
                     <button type="button" onClick={() => setImportMode('manual')} className="outline">📝 Manual Entry</button>
+                    
+                    {/* Analyze Button (Now uses prop) */}
+                    <button
+                      type="button"
+                      className="cta"
+                      onClick={detectIngredients}
+                      disabled={isDetecting || !capturedImageBase64}
+                      style={{ marginLeft: '10px' }}
+                    >
+                      {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
+                    </button>
+
                 </div>
                 {importMode === 'manual' && (
                     <p className="status-message">Manual entry form goes here...</p>
@@ -99,11 +156,36 @@ function CapturePage({ handleImageCapture, handleCloseImport, capturedImageBase6
                     <div className="capture__image-preview">
                         <h3>Image Agent Preview</h3>
                         <img src={capturedImageBase64} alt="Captured Grocery Item" style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}/>
-                        <p>Scanning complete. Found 7 items...</p>
                     </div>
                 )}
                 <div className="capture__preview">
-                    <h3>Auto Classification</h3>
+                    <h3>Vision Agent Results</h3>
+                    {/* Display Status/Error */}
+                    {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
+                    {isDetecting && <p style={{ marginTop: '10px' }}>Analyzing image, please wait...</p>}
+
+                    {capturedImageBase64 && !isDetecting && !detectedResults && !detectionError && (
+                      <p style={{ marginTop: '10px' }}>Image loaded. Click 'Analyze with Vision Agent' to start analysis.</p>
+                    )}
+
+                    {detectedResults ? (
+                        <>
+                            <p>✅ **{detectedResults.length}** items successfully scanned:</p>
+                            <ul>
+                                {detectedResults.map((item, index) => (
+                                    <li key={index}>
+                                        <span>{item.item_name}</span>
+                                        <span className="chip">{item.item_count} units</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    ) : (
+                        <p>A list of detected items will be generated here upon analysis.</p>
+                    )}
+
+                    {/* Original hardcoded list for simulation */}
+                    <p style={{marginTop: '20px', fontWeight: 'bold'}}>Current Inventory Simulation:</p>
                     <ul>
                         {ingredientLibrary.map((ingredient) => (
                             <li key={ingredient.id}>
@@ -264,6 +346,12 @@ function App() {
   const [capturedImageBase64, setCapturedImageBase64] = useState(null);
   const fileInputRef = useRef(null); 
   
+  // Gemini Detection State
+  const [detectedResults, setDetectedResults] = useState(null);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionError, setDetectionError] = useState(null);
+
+
   // Handler Functions
   const toggleIngredient = (id) => {
     setSelectedIngredients((prev) =>
@@ -273,6 +361,7 @@ function App() {
   
   const handleImageCapture = (imageBase64) => {
     setCapturedImageBase64(imageBase64);
+    setDetectedResults(null); // Clear previous results on new image
     setImportMode(null);
   }
 
@@ -286,11 +375,73 @@ function App() {
       const reader = new FileReader();
       reader.onloadend = () => {
         setCapturedImageBase64(reader.result);
+        setDetectedResults(null); // Clear previous results on new image
+        if (fileInputRef.current) fileInputRef.current.value = null;
         setImportMode(null);
       };
       reader.readAsDataURL(file);
     }
   };
+
+  const detectIngredients = async () => {
+    if (!capturedImageBase64) {
+      alert("Please capture or upload an image of your groceries first.");
+      return;
+    }
+
+    if (!apiKey) {
+      setDetectionError("API Key not found. Check VITE_GEMINI_API_KEY.");
+      return;
+    }
+
+
+    setIsDetecting(true);
+    setDetectionError(null);
+
+
+    try {
+      // Logic to extract Base64 data and MIME type from the data URL string
+      const [header, base64Data] = capturedImageBase64.split(',');
+      const mimeTypeMatch = header.match(/:(.*?);/);
+      const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
+
+
+      const imagePart = {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType,
+        },
+      };
+
+
+      const prompt = "Identify and count every distinct grocery item in the image. Return only the structured JSON requested in the schema.";
+
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [imagePart, { text: prompt }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: ingredientSchema,
+        },
+      });
+
+
+      const jsonResponse = JSON.parse(response.text);
+      setDetectedResults(jsonResponse.groceries);
+
+
+      console.log("Gemini Detection Successful. Raw Data (Name and Count):", jsonResponse.groceries);
+
+
+    } catch (err) {
+      console.error("Gemini API Error:", err);
+      setDetectionError(`API Call Failed. Error: ${err.message || "Unknown error"}`);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
 
   return (
     <BrowserRouter>
@@ -318,6 +469,12 @@ function App() {
                 fileInputRef={fileInputRef}
                 handleFileUpload={handleFileUpload}
                 ingredientLibrary={ingredientLibrary}
+                
+                // PASS GEMINI PROPS:
+                detectedResults={detectedResults}
+                isDetecting={isDetecting}
+                detectionError={detectionError}
+                detectIngredients={detectIngredients}
               />
             } 
           />

@@ -142,7 +142,9 @@ function CapturePage({
     handleImageCapture, handleCloseImport, capturedImageBase64, 
     importMode, setImportMode, fileInputRef, handleFileUpload, aggregatedItems,
     // PASSED GEMINI PROPS:
-    detectIngredients, detectedResults, isDetecting, detectionError 
+    detectIngredients, detectedResults, isDetecting, detectionError,
+    // PREFERENCE PROPS:
+    preference, setPreference
 }) {
   const buildStorageBuckets = (items = []) => {
     return items.reduce(
@@ -194,6 +196,28 @@ function CapturePage({
                     <span>🛒 Grocery Agent</span>
       </div>
             </header>
+            {/* Preference Input */}
+            <section className="preference" style={{ padding: '1rem 0' }}>
+              <h2 style={{ marginBottom: 8 }}>What do you feel like making?</h2>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  value={preference}
+                  onChange={(e) => setPreference(e.target.value)}
+                  placeholder="e.g., high-protein pasta, vegan tacos, quick breakfast"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #ddd',
+                    minWidth: 260,
+                    flex: '1 1 260px',
+                  }}
+                />
+                <Link to="/recipes" className="cta" style={{ textDecoration: 'none' }}>
+                  Find Recipes
+                </Link>
+              </div>
+            </section>
             <section className="capture">
                 <h2>Import Groceries</h2>
                 {importMode === 'camera' && (
@@ -343,6 +367,12 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
             <section className="selector">
                 <div className="selector__head">
                     <h2>What&apos;s on the menu?</h2>
+                    <p>Tap to include must-have ingredients. Agents auto-fill the rest.</p>
+                    {preference && (
+                      <p style={{ marginTop: 6 }}>
+                        <strong>Preference:</strong> {preference}
+                      </p>
+                    )}
                     <p>Select ingredients detected in your fridge or pantry to personalize recipe ideas.</p>
                 </div>
                 <div className="chips">
@@ -454,7 +484,8 @@ function RecipeDetailPage({ recipes }) {
 
 function App() {
   // Shared State and Refs
-  const [selectedIngredients, setSelectedIngredients] = useState([])
+  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
+  const [preference, setPreference] = useState('')
   const [importMode, setImportMode] = useState(null)
   const [capturedImageBase64, setCapturedImageBase64] = useState(null)
   const [captureTimestamp, setCaptureTimestamp] = useState(null)
@@ -644,6 +675,10 @@ function App() {
                 isDetecting={isDetecting}
                 detectionError={detectionError}
                 detectIngredients={detectIngredients}
+                
+                // Preference
+                preference={preference}
+                setPreference={setPreference}
               />
             } 
           />
@@ -656,6 +691,7 @@ function App() {
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
                 recipes={recipes}
+                preference={preference}
               />
             } 
           />

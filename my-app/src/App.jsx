@@ -42,6 +42,7 @@ const ingredientSchema = {
 };
 // ------------------------------------------
 
+import { generateRecipesFromIngredients } from './ai/geminiChef.js';
 
 // --- CONSTANTS (DUMMY DATA) ---
 const ingredientLibrary = [
@@ -229,7 +230,7 @@ function InventoryPage({ inventory }) {
     );
 }
 
-function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary, recipes }) {
+function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary, recipes, onCook, loading, error }) {
     return (
         <>
             <section className="selector">
@@ -252,7 +253,11 @@ function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary,
                         )
                     })}
                 </div>
-                <button type="button" className="cta">Let&apos;s Cook</button>
+                <button type="button" className="cta" onClick={onCook} disabled={loading}>
+                    Let&apos;s Cook
+                </button>
+                {loading && <p style={{ marginTop: 8 }}>Chef is thinking… 🍳</p>}
+                {error && <p className="error" style={{ color: '#e53935', marginTop: 8 }}>{error}</p>}
             </section>
 
             <section className="recipes">
@@ -342,6 +347,9 @@ function App() {
   // Shared State and Refs
   const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
   const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
+  const [recipesData, setRecipesData] = useState(recipes);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [importMode, setImportMode] = useState(null);
   const [capturedImageBase64, setCapturedImageBase64] = useState(null);
   const fileInputRef = useRef(null); 
@@ -357,6 +365,24 @@ function App() {
     setSelectedIngredients((prev) =>
       prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id],
     )
+  }
+  
+  const handleCook = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const generated = await generateRecipesFromIngredients(selectedIngredients);
+      if (Array.isArray(generated) && generated.length > 0) {
+        setRecipesData(generated);
+        setFocusedRecipe(generated[0]);
+      } else {
+        setError('No recipes generated. Try different ingredients.');
+      }
+    } catch (e) {
+      setError(e?.message || 'Failed to generate recipes.');
+    } finally {
+      setLoading(false);
+    }
   }
   
   const handleImageCapture = (imageBase64) => {
@@ -486,14 +512,17 @@ function App() {
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
                 ingredientLibrary={ingredientLibrary}
-                recipes={recipes}
+                recipes={recipesData}
+                onCook={handleCook}
+                loading={loading}
+                error={error}
               />
             } 
           />
           {/* Dynamic Recipe Detail Page (uses ID from URL) */}
           <Route 
             path="/recipes/:recipeId" 
-            element={<RecipeDetailPage recipes={recipes} />} 
+            element={<RecipeDetailPage recipes={recipesData} />} 
           />
           {/* Inventory Page */}
           <Route 

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
 import './App.css';
 import { CameraCapture } from './CameraCapture'; // Assuming CameraCapture is available
@@ -103,21 +103,46 @@ const recipes = [
   },
 ]
 
-const inventory = [
-  { item: '🥚 Eggs', quantity: '6', storage: 'Fridge', expires: 'Nov 15' },
-  { item: '🐟 Salmon filet', quantity: '2', storage: 'Fridge', expires: 'Nov 10' },
-  { item: '🍝 Pasta shells', quantity: '1 box', storage: 'Pantry', expires: 'Apr 2026' },
-  { item: '🥛 Greek yogurt', quantity: '1 tub', storage: 'Fridge', expires: 'Nov 18' },
-]
-
 // --- PAGE COMPONENTS ---
 
 function CapturePage({ 
     handleImageCapture, handleCloseImport, capturedImageBase64, 
-    importMode, setImportMode, fileInputRef, handleFileUpload, ingredientLibrary, storedDetections,
+    importMode, setImportMode, fileInputRef, handleFileUpload, inventoryItems, storedDetections,
     // PASSED GEMINI PROPS:
     detectIngredients, detectedResults, isDetecting, detectionError 
 }) {
+  const buildStorageBuckets = (items = []) => {
+    return items.reduce(
+      (acc, item) => {
+        const location = (item?.storage_location || '').toLowerCase()
+        if (location === 'fridge') {
+          acc.fridge.push(item)
+        } else {
+          acc.pantry.push(item)
+        }
+        return acc
+      },
+      { fridge: [], pantry: [] },
+    )
+  }
+
+  const renderStorageList = (items = [], emptyLabel) =>
+    items.length > 0 ? (
+      <ul className="storage-card__list">
+        {items.map((item, index) => (
+          <li key={`${item.item_name}-${index}`} className="storage-card__item">
+            <span className="storage-card__item-name">
+              {(item?.emoji && item.emoji.trim()) || '🛒'} {item.item_name}
+            </span>
+            <span className="chip">{item.item_count} units</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="storage-card__empty">{emptyLabel}</p>
+    )
+
+  const inventoryBuckets = buildStorageBuckets(inventoryItems)
 
   return (
     <>
@@ -207,17 +232,26 @@ function CapturePage({
                         <p>A list of detected items will be generated here upon analysis.</p>
                     )}
 
-                    <p style={{marginTop: '20px', fontWeight: 'bold'}}>Current Inventory Simulation:</p>
-                    <ul>
-                        {ingredientLibrary.map((ingredient) => (
-                            <li key={ingredient.id}>
-                                <span>{ingredient.label}</span>
-                                <span className={ingredient.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                                    {ingredient.storage}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
+                </div>
+                <div className="storage-display">
+                  <div className="storage-card storage-card--fridge">
+                    <div className="storage-card__header">
+                      <span className="storage-card__icon">🧊</span>
+                      <strong>Fridge</strong>
+                    </div>
+                    <div className="storage-card__body">
+                      {renderStorageList(inventoryBuckets.fridge, 'Nothing chilling right now.')}
+                    </div>
+                  </div>
+                  <div className="storage-card storage-card--pantry">
+                    <div className="storage-card__header">
+                      <span className="storage-card__icon">🗄️</span>
+                      <strong>Pantry</strong>
+                    </div>
+                    <div className="storage-card__body">
+                      {renderStorageList(inventoryBuckets.pantry, 'Shelves are empty for now.')}
+                    </div>
+                  </div>
                 </div>
                 <div className="capture__preview" style={{ marginTop: '24px' }}>
                     <h3>Stored Detections</h3>
@@ -266,24 +300,30 @@ function InventoryPage({ inventory }) {
     return (
         <section className="inventory">
             <div className="inventory__head">
-                <h2>Inventory &amp; Expiry</h2>
+                <h2>Inventory &amp; Totals</h2>
                 <button type="button" className="outline">Sync Grocery Agent</button>
             </div>
             <ul>
-                {inventory.map((item) => (
-                    <li key={item.item}>
-                        <div>
-                            <strong>{item.item}</strong>
-                            <span>{item.quantity}</span>
-                        </div>
-                        <div className="inventory__meta">
-                            <span className={item.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                                {item.storage}
-                            </span>
-                            <span className="expiry">Expires {item.expires}</span>
-                        </div>
-                    </li>
-                ))}
+                {inventory.length === 0 ? (
+                    <li>Inventory is empty. Run a detection to populate it.</li>
+                ) : (
+                    inventory.map((item) => (
+                        <li key={`${item.item_name}-${item.storage_location}`}>
+                            <div>
+                                <strong>{item.item_name}</strong>
+                                <span>{item.item_count} units</span>
+                            </div>
+                            <div className="inventory__meta">
+                                <span className={item.storage_location === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
+                                    {item.storage_location}
+                                </span>
+                                {item.updated_at && (
+                                    <span className="expiry">Updated {new Date(item.updated_at).toLocaleDateString()}</span>
+                                )}
+                            </div>
+                        </li>
+                    ))
+                )}
             </ul>
         </section>
     );
@@ -411,6 +451,29 @@ function App() {
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionError, setDetectionError] = useState(null)
   const [storedDetections, setStoredDetections] = useState([])
+  const [inventoryItems, setInventoryItems] = useState([])
+
+  useEffect(() => {
+    const fetchInventory = async () => {
+      try {
+        const response = await fetch('/api/detections')
+        if (!response.ok) {
+          throw new Error(`Failed to fetch inventory: ${response.status}`)
+        }
+
+        const data = await response.json()
+        const inventory = Array.isArray(data?.inventory) ? data.inventory : []
+        const detections = Array.isArray(data?.detections) ? data.detections : []
+
+        setInventoryItems(inventory)
+        setStoredDetections(detections)
+      } catch (error) {
+        console.error('Unable to load inventory from API:', error)
+      }
+    }
+
+    fetchInventory()
+  }, [])
 
 
   // Handler Functions
@@ -517,6 +580,9 @@ function App() {
         } else {
           setStoredDetections((prev) => [payload, ...prev])
         }
+        if (Array.isArray(responseBody?.inventory)) {
+          setInventoryItems(responseBody.inventory)
+        }
       } catch (persistError) {
         console.error('Failed to persist detection:', persistError)
       }
@@ -558,7 +624,7 @@ function App() {
                 setImportMode={setImportMode}
                 fileInputRef={fileInputRef}
                 handleFileUpload={handleFileUpload}
-                ingredientLibrary={ingredientLibrary}
+                inventoryItems={inventoryItems}
                 storedDetections={storedDetections}
                 
                 // PASS GEMINI PROPS:
@@ -589,7 +655,7 @@ function App() {
           {/* Inventory Page */}
           <Route 
             path="/inventory" 
-            element={<InventoryPage inventory={inventory} />} 
+            element={<InventoryPage inventory={inventoryItems} />} 
           />
         </Routes>
         

@@ -25,8 +25,13 @@ app.use(express.json())
 
 app.get('/api/detections', async (req, res) => {
   try {
-    const inventoryItems = await listInventoryItems()
-    res.json({ inventory: inventoryItems })
+    const collection = await getCollection()
+    const [inventoryItems, detections] = await Promise.all([
+      listInventoryItems(),
+      collection.find().sort({ captured_date: -1 }).toArray(),
+    ])
+
+    res.json({ inventory: inventoryItems, detections })
   } catch (error) {
     console.error('Failed to fetch detections', error)
     res.status(500).json({ error: 'Failed to fetch detections' })

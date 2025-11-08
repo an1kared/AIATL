@@ -81,31 +81,57 @@ const ingredientLibrary = [
   { id: 'salmon', label: '🐟 Salmon', storage: 'Fridge' },
   { id: 'yogurt', label: '🥛 Yogurt', storage: 'Fridge' },
   { id: 'avocado', label: '🥑 Avocado', storage: 'Pantry' },
-]
+];
 
 const recipes = [
-  // ... recipe data
-]
+  {
+    id: 'salmon-bowl',
+    title: 'Omega Boost Salmon Bowl',
+    difficulty: 'Easy',
+    duration: '20 min',
+    nutritionScore: 92,
+    summary:
+      'Protein-packed bowl with seared salmon, herb quinoa, and a creamy yogurt drizzle.',
+    ingredients: ['🐟 Salmon', '🥬 Spinach', '🍅 Tomato', '🥛 Yogurt'],
+    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+  },
+  {
+    id: 'green-goddess-omelette',
+    title: 'Green Goddess Omelette',
+    difficulty: 'Medium',
+    duration: '15 min',
+    nutritionScore: 88,
+    summary: 'Fluffy omelette loaded with spinach, avocado crema, and herbs.',
+    ingredients: ['🥚 Eggs', '🥬 Spinach', '🥑 Avocado'],
+    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+  },
+  {
+    id: 'creamy-tomato-pasta',
+    title: 'Creamy Tomato Pasta',
+    difficulty: 'Easy',
+    duration: '25 min',
+    nutritionScore: 80,
+    summary: 'Silky pasta with a tangy tomato yogurt sauce and wilted greens.',
+    ingredients: ['🍝 Pasta', '🍅 Tomato', '🥬 Spinach', '🥛 Yogurt'],
+    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+  },
+];
 
 const inventory = [
-  // ... inventory data
+  { item: '🥚 Eggs', quantity: '6', storage: 'Fridge', expires: 'Nov 15' },
+  { item: '🐟 Salmon filet', quantity: '2', storage: 'Fridge', expires: 'Nov 10' },
+  { item: '🍝 Pasta shells', quantity: '1 box', storage: 'Pantry', expires: 'Apr 2026' },
+  { item: '🥛 Greek yogurt', quantity: '1 tub', storage: 'Fridge', expires: 'Nov 18' },
 ]
-// --------------------------------------------
 
-
-// --- The Main App Component ---
 function App() {
-  // --- Original Recipe/Inventory State ---
-  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
-  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
+  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
+  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0])
 
-  // --- Gemini Detection State ---
-  // We remove 'detectedFile' since we are now using the Base64 version
-  const [detectedResults, setDetectedResults] = useState(null); // The list of detected items
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectionError, setDetectionError] = useState(null);
-
-  // State for handling different import modes and image data
+  // State for handling different import modes
   const [importMode, setImportMode] = useState(null); // 'camera', 'file', 'manual', or null
   const [capturedImageBase64, setCapturedImageBase64] = useState(null);
 
@@ -122,7 +148,6 @@ function App() {
   const handleImageCapture = (imageBase64) => {
     console.log('Image captured:', imageBase64.substring(0, 50) + '...');
     setCapturedImageBase64(imageBase64);
-    setDetectedResults(null); // Clear old results
     setImportMode(null); // Close the camera view
   }
 
@@ -134,9 +159,6 @@ function App() {
 
       reader.onloadend = () => {
         setCapturedImageBase64(reader.result);
-        setDetectedResults(null); // Clear old results
-        // file input needs to be cleared so the same file can be selected again
-        if (fileInputRef.current) fileInputRef.current.value = null;
         setImportMode(null);
       };
 
@@ -148,56 +170,6 @@ function App() {
   const handleCloseImport = () => {
     setImportMode(null);
   };
-
-  // --- CORRECTED: Detection Handler using the Base64 state ---
-  const detectIngredients = async () => {
-    // FIX 1: Check the new state variable for the image data
-    if (!capturedImageBase64) {
-      alert("Please capture or upload an image of your groceries first.");
-      return;
-    }
-
-    setIsDetecting(true);
-    setDetectionError(null);
-
-    try {
-      // FIX 2: Create the image part directly from the Base64 string
-      const [header, base64Data] = capturedImageBase64.split(',');
-      const mimeTypeMatch = header.match(/:(.*?);/);
-      const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg'; // Default to jpeg if unable to parse
-
-      const imagePart = {
-        inlineData: {
-          data: base64Data,
-          mimeType: mimeType,
-        },
-      };
-
-      const prompt = "Identify and count every distinct grocery item in the image. Return only the structured JSON requested in the schema.";
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [imagePart, { text: prompt }],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: ingredientSchema,
-        },
-      });
-
-      const jsonResponse = JSON.parse(response.text);
-      setDetectedResults(jsonResponse.groceries);
-
-      console.log("Gemini Detection Successful. Raw Data (Name and Count):", jsonResponse.groceries);
-
-    } catch (err) {
-      console.error("Gemini API Error:", err);
-      setDetectionError("Failed to detect ingredients. Check the console for details.");
-    } finally {
-      setIsDetecting(false);
-    }
-  };
-  // --------------------------------------------------------
-
 
   return (
     <main className="app">
@@ -220,17 +192,15 @@ function App() {
       <section className="capture">
         <h2>Import Groceries</h2>
 
-        {/* 🚨 You would implement CameraCapture here, passing handleImageCapture and handleCloseImport */}
-        {/* {importMode === 'camera' && (
+        {/* 🚨 Renders the camera view ONLY when importMode is 'camera' */}
+        {importMode === 'camera' && (
           <CameraCapture
             onCapture={handleImageCapture}
             onClose={handleCloseImport}
           />
-        )} */}
+        )}
 
         <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
-
-        {/* --- MODIFIED: Gemini Upload UI integrated here --- */}
         <div className="capture__actions">
 
           {/* Hidden File Input Element (Necessary for the Upload Photo button) */}
@@ -249,7 +219,7 @@ function App() {
 
           {/* 📂 UPLOAD PHOTO: Clicks the hidden file input */}
           <button type="button"
-            onClick={() => fileInputRef.current.click()}
+                  onClick={() => fileInputRef.current.click()}
           >
             📂 Upload Photo
           </button>
@@ -258,23 +228,11 @@ function App() {
           <button type="button" onClick={() => setImportMode('manual')} className="outline">
             📝 Manual Entry
           </button>
-
-          {/* Analyze Button */}
-          <button
-            type="button"
-            className="cta"
-            onClick={detectIngredients}
-            // FIX 3: Check capturedImageBase64 instead of detectedFile
-            disabled={isDetecting || !capturedImageBase64}
-            style={{ marginLeft: '10px' }}
-          >
-            {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
-          </button>
         </div>
 
         {/* Display an interface based on the selected mode (e.g., a file input or manual form) */}
         {importMode === 'manual' && (
-          <p className="status-message">Manual entry form goes here...</p>
+            <p className="status-message">Manual entry form goes here...</p>
         )}
 
         {/* Display a preview of the captured image */}
@@ -284,30 +242,26 @@ function App() {
             <img
               src={capturedImageBase64}
               alt="Captured Grocery Item"
-              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px', marginTop: '15px' }}
+              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
             />
+            <p>Scanning complete. Found 7 items...</p>
           </div>
         )}
-        {/* -------------------------------------------------- */}
 
         <div className="capture__preview">
-          <h3>Vision Agent Results</h3>
-          {/* Display Status/Error */}
-          {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
-
-          {capturedImageBase64 && !isDetecting && !detectedResults && (
-            <p style={{ marginTop: '10px' }}>Image loaded. Click 'Analyze with Vision Agent' to start.</p>
-          )}
-
-          {detectedResults ? (
-            <p>✅ **{detectedResults.length}** items successfully scanned and classified. (Data stored in `detectedResults` state for icon rendering.)</p>
-          ) : (
-            <p>A list of detected items will be generated here.</p>
-          )}
+          <h3>Auto Classification</h3>
+          <ul>
+            {ingredientLibrary.map((ingredient) => (
+              <li key={ingredient.id}>
+                <span>{ingredient.label}</span>
+                <span className={ingredient.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
+                  {ingredient.storage}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
-
-      {/* ... The rest of your App UI remains the same ... */}
 
       <section className="selector">
         <div className="selector__head">
@@ -334,103 +288,191 @@ function App() {
         </button>
       </section>
 
-      <section className="recipes">
-        <div className="recipes__head">
-          <h2>Recipe Matches</h2>
-          <span>{selectedIngredients.length} key ingredients selected</span>
-        </div>
-        <div className="recipe-list">
-          {recipes.map((recipe) => (
-            <article
-              key={recipe.id}
-              className={`recipe-card ${focusedRecipe.id === recipe.id ? 'focused' : ''}`}
-              onClick={() => setFocusedRecipe(recipe)}
-            >
-              <div className="recipe-card__top">
-                <h3>{recipe.title}</h3>
-                <span className="score">Nutrition {recipe.nutritionScore}/100</span>
-              </div>
-              <p className="recipe-card__summary">{recipe.summary}</p>
-              <div className="recipe-card__meta">
-                <span>⏱ {recipe.duration}</span>
-                <span>⭐ {recipe.difficulty}</span>
-              </div>
-              <div className="recipe-card__ingredients">
-                {recipe.ingredients.map((item) => (
-                  <span key={item}>{item}</span>
-                ))}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      {focusedRecipe && (
-        <section className="recipe-detail">
-          <header>
-            <h2>{focusedRecipe.title}</h2>
-            <div className="detail__tags">
-              <span>⏱ {focusedRecipe.duration}</span>
-              <span>⭐ {focusedRecipe.difficulty}</span>
-              <span>🥗 Score {focusedRecipe.nutritionScore}/100</span>
-            </div>
-          </header>
-          <p>{focusedRecipe.summary}</p>
-          <h3>Ingredients</h3>
-          <ul>
-            {focusedRecipe.ingredients.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-          <div className="media">
-            <div className="media__block">
-              <video controls src={focusedRecipe.videoUrl} />
-              <span>AI-generated walkthrough</span>
-            </div>
-            <div className="media__block">
-              <audio controls src={focusedRecipe.audioUrl} />
-              <span>Audio brief</span>
-            </div>
-          </div>
-        </section>
-      )}
-
-      <section className="inventory">
-        <div className="inventory__head">
-          <h2>Inventory &amp; Expiry</h2>
-          <button type="button" className="outline">
-            Sync Grocery Agent
-          </button>
-        </div>
-        <ul>
-          {inventory.map((item) => (
-            <li key={item.item}>
-              <div>
-                <strong>{item.item}</strong>
-                <span>{item.quantity}</span>
-              </div>
-              <div className="inventory__meta">
-                <span className={item.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                  {item.storage}
-                </span>
-                <span className="expiry">Expires {item.expires}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <footer className="footer">
-        <p>
-          Agents are monitoring nutrition, inventory, and grocery lists around the clock. Connect to
-          your smart fridge to unlock proactive restock alerts.
-        </p>
-        <button type="button" className="outline">
-          View Agent Activity Log
-        </button>
-      </footer>
-    </main>
-  )
+            <section className="recipes">
+                <div className="recipes__head">
+                    <h2>Recipe Matches</h2>
+                    <span>{selectedIngredients.length} key ingredients selected</span>
+                </div>
+                <div className="recipe-list">
+                    {recipes.map((recipe) => (
+                        <Link
+                            to={`/recipes/${recipe.id}`}
+                            key={recipe.id}
+                            style={{ textDecoration: 'none', color: 'inherit' }}
+                        >
+                            <article
+                                className="recipe-card"
+                            >
+                                <div className="recipe-card__top">
+                                    <h3>{recipe.title}</h3>
+                                    <span className="score">Nutrition {recipe.nutritionScore}/100</span>
+                                </div>
+                                <p className="recipe-card__summary">{recipe.summary}</p>
+                                <div className="recipe-card__meta">
+                                    <span>⏱ {recipe.duration}</span>
+                                    <span>⭐ {recipe.difficulty}</span>
+                                </div>
+                                <div className="recipe-card__ingredients">
+                                    {recipe.ingredients.map((item) => (
+                                        <span key={item}>{item}</span>
+                                    ))}
+                                </div>
+                            </article>
+                        </Link>
+                    ))}
+                </div>
+            </section>
+        </>
+    );
 }
 
-export default App
+function RecipeDetailPage({ recipes }) {
+    // Uses the URL parameter to find the specific recipe
+    const { recipeId } = useParams();
+    const recipe = recipes.find(r => r.id === recipeId);
+
+    if (!recipe) {
+        return <section className="recipe-detail"><h2>Recipe Not Found</h2></section>;
+    }
+
+    return (
+        <section className="recipe-detail">
+            <Link to="/recipes" className="back-button">← Back to Recipes</Link>
+
+            <header>
+                <h2>{recipe.title}</h2>
+                <div className="detail__tags">
+                    <span>⏱ {recipe.duration}</span>
+                    <span>⭐ {recipe.difficulty}</span>
+                    <span>🥗 Score {recipe.nutritionScore}/100</span>
+                </div>
+            </header>
+            <p>{recipe.summary}</p>
+            <h3>Ingredients</h3>
+            <ul>
+                {recipe.ingredients.map((item) => (
+                    <li key={item}>{item}</li>
+                ))}
+            </ul>
+            <div className="media">
+                <div className="media__block">
+                    <video controls src={recipe.videoUrl} />
+                    <span>AI-generated walkthrough</span>
+                </div>
+                <div className="media__block">
+                    <audio controls src={recipe.audioUrl} />
+                    <span>Audio brief</span>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+
+// --- MAIN APP COMPONENT ---
+
+function App() {
+  // Shared State and Refs
+  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
+  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
+  const [importMode, setImportMode] = useState(null);
+  const [capturedImageBase64, setCapturedImageBase64] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Handler Functions
+  const toggleIngredient = (id) => {
+    setSelectedIngredients((prev) =>
+      prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id],
+    )
+  }
+
+  const handleImageCapture = (imageBase64) => {
+    setCapturedImageBase64(imageBase64);
+    setImportMode(null);
+  }
+
+  const handleCloseImport = () => {
+    setImportMode(null);
+  };
+
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCapturedImageBase64(reader.result);
+        setImportMode(null);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  return (
+    <BrowserRouter>
+      <main className="app">
+
+        {/* Navigation Menu */}
+        <nav className="bottom-nav">
+          <Link to="/">📸 Capture</Link>
+          <Link to="/recipes">🥗 Recipes</Link>
+          <Link to="/inventory">🧊 Inventory</Link>
+        </nav>
+
+        {/* Define the Routes, passing state and handlers as props */}
+        <Routes>
+          {/* Capture/Home Page */}
+          <Route
+            path="/"
+            element={
+              <CapturePage
+                handleImageCapture={handleImageCapture}
+                handleCloseImport={handleCloseImport}
+                capturedImageBase64={capturedImageBase64}
+                importMode={importMode}
+                setImportMode={setImportMode}
+                fileInputRef={fileInputRef}
+                handleFileUpload={handleFileUpload}
+                ingredientLibrary={ingredientLibrary}
+              />
+            }
+          />
+          {/* Recipe List Page */}
+          <Route
+            path="/recipes"
+            element={
+              <RecipesPage
+                selectedIngredients={selectedIngredients}
+                toggleIngredient={toggleIngredient}
+                ingredientLibrary={ingredientLibrary}
+                recipes={recipes}
+              />
+            }
+          />
+          {/* Dynamic Recipe Detail Page (uses ID from URL) */}
+          <Route
+            path="/recipes/:recipeId"
+            element={<RecipeDetailPage recipes={recipes} />}
+          />
+          {/* Inventory Page */}
+          <Route
+            path="/inventory"
+            element={<InventoryPage inventory={inventory} />}
+          />
+        </Routes>
+
+        <footer className="footer">
+            <p>
+                Agents are monitoring nutrition, inventory, and grocery lists around the clock. Connect to
+                your smart fridge to unlock proactive restock alerts.
+            </p>
+            <button type="button" className="outline">
+                View Agent Activity Log
+            </button>
+        </footer>
+
+      </main>
+    </BrowserRouter>
+  );
+}
+
+export default App;

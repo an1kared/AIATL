@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
 import './App.css';
 import { CameraCapture } from './CameraCapture'; // Assuming CameraCapture is available
-import {GoogleGenAI} from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // --- Gemini AI Setup ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -13,7 +13,7 @@ if (!apiKey) {
   console.error("VITE_GEMINI_API_KEY is not set in .env.local");
 }
 
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenerativeAI(apiKey);
 
 // Define the desired structured output schema for item name and count
 const ingredientSchema = {
@@ -35,6 +35,11 @@ const ingredientSchema = {
             description:
               'The quantity or count of the specific item detected (e.g., 3 for 3 apples, 1 for 1 box of cereal).',
           },
+          emoji: {
+            type: 'string',
+            description:
+              'A single relevant emoji representing the ingredient (e.g., 🥚 for eggs, 🥬 for spinach).',
+          },
           storage_location: {
             type: 'string',
             enum: ['Fridge', 'Pantry'],
@@ -42,7 +47,7 @@ const ingredientSchema = {
               "Where the item should be stored. Return only 'Fridge' for refrigerated/frozen goods or 'Pantry' for shelf-stable items.",
           },
         },
-        required: ['item_name', 'item_count', 'storage_location'],
+        required: ['item_name', 'item_count', 'emoji', 'storage_location'],
       },
     },
   },
@@ -50,18 +55,7 @@ const ingredientSchema = {
 }
 // ------------------------------------------
 
-
 // --- CONSTANTS (DUMMY DATA) ---
-const ingredientLibrary = [
-  { id: 'eggs', label: '🥚 Eggs', storage: 'Fridge' },
-  { id: 'spinach', label: '🥬 Spinach', storage: 'Fridge' },
-  { id: 'tomato', label: '🍅 Tomato', storage: 'Pantry' },
-  { id: 'pasta', label: '🍝 Pasta', storage: 'Pantry' },
-  { id: 'salmon', label: '🐟 Salmon', storage: 'Fridge' },
-  { id: 'yogurt', label: '🥛 Yogurt', storage: 'Fridge' },
-  { id: 'avocado', label: '🥑 Avocado', storage: 'Pantry' },
-];
-
 const recipes = [
   {
     id: 'salmon-bowl',
@@ -97,27 +91,94 @@ const recipes = [
     videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
     audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
   },
-];
+]
 
-const inventory = [
-  { item: '🥚 Eggs', quantity: '6', storage: 'Fridge', expires: 'Nov 15' },
-  { item: '🐟 Salmon filet', quantity: '2', storage: 'Fridge', expires: 'Nov 10' },
-  { item: '🍝 Pasta shells', quantity: '1 box', storage: 'Pantry', expires: 'Apr 2026' },
-  { item: '🥛 Greek yogurt', quantity: '1 tub', storage: 'Fridge', expires: 'Nov 18' },
-];
-// ------------------------------------------------
+function aggregateDetections(detections = []) {
+  const map = new Map()
 
+  detections.forEach((detection) => {
+    if (!Array.isArray(detection?.groceries)) return
+
+    detection.groceries.forEach((item) => {
+      const itemName = (item?.item_name || '').trim()
+      const storageLocation = (item?.storage_location || '').trim()
+
+      if (!itemName || !storageLocation) {
+        return
+      }
+
+      const key = `${itemName.toLowerCase()}|${storageLocation.toLowerCase()}`
+      const existing = map.get(key) || {
+        item_name: itemName,
+        storage_location: storageLocation,
+        item_count: 0,
+        emoji: '',
+      }
+
+      const count = Number(item?.item_count)
+      if (!Number.isNaN(count) && Number.isFinite(count) && count > 0) {
+        existing.item_count += count
+      }
+
+      if (!existing.emoji && item?.emoji) {
+        existing.emoji = item.emoji
+      }
+
+      map.set(key, existing)
+    })
+  })
+
+  return Array.from(map.values())
+    .map((entry) => ({
+      ...entry,
+      emoji: entry.emoji?.trim() || '🛒',
+    }))
+    .sort((a, b) => a.item_name.localeCompare(b.item_name))
+}
 
 // --- PAGE COMPONENTS ---
 
 function CapturePage({ 
     handleImageCapture, handleCloseImport, capturedImageBase64, 
-    importMode, setImportMode, fileInputRef, handleFileUpload, ingredientLibrary,
+    importMode, setImportMode, fileInputRef, handleFileUpload, aggregatedItems,
     // PASSED GEMINI PROPS:
     detectIngredients, detectedResults, isDetecting, detectionError,
     // PREFERENCE PROPS:
     preference, setPreference
 }) {
+  const buildStorageBuckets = (items = []) => {
+    return items.reduce(
+      (acc, item) => {
+        const location = (item?.storage_location || '').toLowerCase()
+        if (location === 'fridge') {
+          acc.fridge.push(item)
+        } else {
+          acc.pantry.push(item)
+        }
+        return acc
+      },
+      { fridge: [], pantry: [] },
+    )
+  }
+
+  const renderStorageList = (items = [], emptyLabel) =>
+    items.length > 0 ? (
+      <ul className="storage-card__list">
+        {items.map((item, index) => (
+          <li key={`${item.item_name}-${index}`} className="storage-card__item">
+            <span className="storage-card__item-name">
+              {(item?.emoji && item.emoji.trim()) || '🛒'} {item.item_name}
+            </span>
+            <span className="chip">{item.item_count} units</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="storage-card__empty">{emptyLabel}</p>
+    )
+
+  const inventoryBuckets = buildStorageBuckets(aggregatedItems)
+
   return (
     <>
             <header className="hero">
@@ -203,51 +264,51 @@ function CapturePage({
                     {detectedResults ? (
                         <>
                             <p>
-                              📅 Captured on{' '}
-                              <strong>
-                                {detectedResults.captured_date
-                                  ? new Date(detectedResults.captured_date).toLocaleString(undefined, {
-                                      dateStyle: 'medium',
-                                      timeStyle: 'short',
-                                    })
-                                  : 'Unknown time'}
-                              </strong>
-                            </p>
-                            <p>
                               ✅ <strong>{detectedResults.groceries.length}</strong> items successfully categorized:
                             </p>
                             <ul>
-                                {detectedResults.groceries.map((item, index) => (
-                                    <li key={index}>
-                                        <span>{item.item_name}</span>
-                                        <span className="chip">{item.item_count} units</span>
-                                        <span
-                                          className={`chip ${
-                                            item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
-                                          }`}
-                                        >
-                                          {item.storage_location}
-                                        </span>
-                                    </li>
-                                ))}
+                                {detectedResults.groceries.map((item, index) => {
+                                    const emoji = item?.emoji && item.emoji.trim() ? item.emoji.trim() : '🛒'
+                                    return (
+                                        <li key={index}>
+                                            <span>{emoji} {item.item_name}</span>
+                                            <span className="chip">{item.item_count} units</span>
+                                            <span
+                                              className={`chip ${
+                                                item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
+                                              }`}
+                                            >
+                                              {item.storage_location}
+                                            </span>
+                                        </li>
+                                    )
+                                })}
                             </ul>
                         </>
                     ) : (
                         <p>A list of detected items will be generated here upon analysis.</p>
                     )}
 
-                    {/* Original hardcoded list for simulation */}
-                    <p style={{marginTop: '20px', fontWeight: 'bold'}}>Current Inventory Simulation:</p>
-                    <ul>
-                        {ingredientLibrary.map((ingredient) => (
-                            <li key={ingredient.id}>
-                                <span>{ingredient.label}</span>
-                                <span className={ingredient.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                                    {ingredient.storage}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
+                </div>
+                <div className="storage-display">
+                  <div className="storage-card storage-card--fridge">
+                    <div className="storage-card__header">
+                      <span className="storage-card__icon">🧊</span>
+                      <strong>Fridge</strong>
+                    </div>
+                    <div className="storage-card__body">
+                      {renderStorageList(inventoryBuckets.fridge, 'Nothing chilling right now.')}
+                    </div>
+                  </div>
+                  <div className="storage-card storage-card--pantry">
+                    <div className="storage-card__header">
+                      <span className="storage-card__icon">🗄️</span>
+                      <strong>Pantry</strong>
+                    </div>
+                    <div className="storage-card__body">
+                      {renderStorageList(inventoryBuckets.pantry, 'Shelves are empty for now.')}
+                    </div>
+                  </div>
                 </div>
             </section>
         </>
@@ -258,30 +319,49 @@ function InventoryPage({ inventory }) {
     return (
         <section className="inventory">
             <div className="inventory__head">
-                <h2>Inventory &amp; Expiry</h2>
+                <h2>Inventory &amp; Totals</h2>
                 <button type="button" className="outline">Sync Grocery Agent</button>
             </div>
             <ul>
-                {inventory.map((item) => (
-                    <li key={item.item}>
-                        <div>
-                            <strong>{item.item}</strong>
-                            <span>{item.quantity}</span>
-                        </div>
-                        <div className="inventory__meta">
-                            <span className={item.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                                {item.storage}
-                            </span>
-                            <span className="expiry">Expires {item.expires}</span>
-                        </div>
-                    </li>
-                ))}
+                {inventory.length === 0 ? (
+                    <li>Inventory is empty. Run a detection to populate it.</li>
+                ) : (
+                    inventory.map((item) => (
+                        <li key={`${item.item_name}-${item.storage_location}`}>
+                            <div>
+                                <strong>{item.item_name}</strong>
+                                <span>{item.item_count} units</span>
+                            </div>
+                            <div className="inventory__meta">
+                                <span className={item.storage_location === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
+                                    {item.storage_location}
+                                </span>
+                                {item.updated_at && (
+                                    <span className="expiry">Updated {new Date(item.updated_at).toLocaleDateString()}</span>
+                                )}
+                            </div>
+                        </li>
+                    ))
+                )}
             </ul>
         </section>
     );
 }
 
-function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary, recipes, preference }) {
+function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, recipes }) {
+    const ingredientOptions = Array.from(
+        aggregatedItems.reduce((map, item) => {
+            const key = item.item_name.trim().toLowerCase()
+            if (!map.has(key)) {
+                map.set(key, {
+                    id: key,
+                    label: `${(item.emoji && item.emoji.trim()) || '🛒'} ${item.item_name}`,
+                })
+            }
+            return map
+        }, new Map()).values()
+    )
+
     return (
         <>
             <section className="selector">
@@ -293,23 +373,30 @@ function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary,
                         <strong>Preference:</strong> {preference}
                       </p>
                     )}
+                    <p>Select ingredients detected in your fridge or pantry to personalize recipe ideas.</p>
                 </div>
                 <div className="chips">
-                    {ingredientLibrary.map((ingredient) => {
-                        const active = selectedIngredients.includes(ingredient.id)
-                        return (
-                            <button
-                                type="button"
-                                key={ingredient.id}
-                                className={`chip-button ${active ? 'active' : ''}`}
-                                onClick={() => toggleIngredient(ingredient.id)}
-                            >
-                                {ingredient.label}
-                            </button>
-                        )
-                    })}
+                    {ingredientOptions.length === 0 ? (
+                        <p style={{ margin: 0 }}>Run a detection to load ingredient chips.</p>
+                    ) : (
+                        ingredientOptions.map((ingredient) => {
+                            const active = selectedIngredients.includes(ingredient.id)
+                            return (
+                                <button
+                                    type="button"
+                                    key={ingredient.id}
+                                    className={`chip-button ${active ? 'active' : ''}`}
+                                    onClick={() => toggleIngredient(ingredient.id)}
+                                >
+                                    {ingredient.label}
+                                </button>
+                            )
+                        })
+                    )}
                 </div>
-                <button type="button" className="cta">Let&apos;s Cook</button>
+                <button type="button" className="cta" disabled={ingredientOptions.length === 0}>
+                    Let&apos;s Cook
+                </button>
             </section>
 
             <section className="recipes">
@@ -408,7 +495,33 @@ function App() {
   const [detectedResults, setDetectedResults] = useState(null)
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionError, setDetectionError] = useState(null)
+  const [detections, setDetections] = useState([])
 
+  useEffect(() => {
+    const fetchDetections = async () => {
+      try {
+        const response = await fetch('/api/detections')
+        if (!response.ok) {
+          throw new Error(`Failed to fetch detections: ${response.status}`)
+        }
+
+        const data = await response.json()
+        const detectionsResponse = Array.isArray(data?.detections)
+          ? data.detections
+          : Array.isArray(data)
+            ? data
+            : []
+
+        setDetections(detectionsResponse)
+      } catch (error) {
+        console.error('Unable to load detections from API:', error)
+      }
+    }
+
+    fetchDetections()
+  }, [])
+
+  const aggregatedItems = useMemo(() => aggregateDetections(detections), [detections])
 
   // Handler Functions
   const toggleIngredient = (id) => {
@@ -475,26 +588,48 @@ function App() {
 
 
       const prompt =
-        'Identify every distinct grocery item in the photo, count how many of each you see, and determine whether each belongs in the fridge (cold/frozen goods) or pantry (shelf-stable/dry goods). Return only the structured JSON that matches the provided schema.'
+        "Identify every distinct grocery item in the photo, count how many of each you see, and determine whether each belongs in the fridge (cold/frozen goods) or pantry (shelf-stable/dry goods). For every item, include an \"emoji\" field with a single relevant emoji character (exactly one emoji) that best represents that ingredient. If no perfect emoji exists, pick the closest reasonable one. Return only the structured JSON that matches the provided schema."
 
 
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [imagePart, { text: prompt }],
-        config: {
-          responseMimeType: "application/json",
+      const model = ai.getGenerativeModel({
+        model: 'gemini-2.5-flash',
+        generationConfig: {
+          responseMimeType: 'application/json',
           responseSchema: ingredientSchema,
         },
-      });
+      })
 
-
-      const jsonResponse = JSON.parse(response.text)
+      const generation = await model.generateContent([imagePart, { text: prompt }])
+      const jsonResponse = JSON.parse(generation.response.text())
       const capturedDate = captureTimestamp || new Date().toISOString()
       const payload = {
         captured_date: capturedDate,
         groceries: jsonResponse.groceries || [],
       }
       setDetectedResults(payload)
+
+      try {
+        const response = await fetch('/api/detections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}))
+          throw new Error(errorBody.error || 'Unknown server error')
+        }
+
+        console.log('Gemini Detection saved to MongoDB.')
+        const responseBody = await response.json().catch(() => null)
+        if (responseBody?.detection) {
+          setDetections((prev) => [responseBody.detection, ...prev])
+        } else {
+          setDetections((prev) => [payload, ...prev])
+        }
+      } catch (persistError) {
+        console.error('Failed to persist detection:', persistError)
+      }
 
       console.log('Gemini Detection Successful. Payload:', payload)
 
@@ -533,7 +668,7 @@ function App() {
                 setImportMode={setImportMode}
                 fileInputRef={fileInputRef}
                 handleFileUpload={handleFileUpload}
-                ingredientLibrary={ingredientLibrary}
+                aggregatedItems={aggregatedItems}
                 
                 // PASS GEMINI PROPS:
                 detectedResults={detectedResults}
@@ -552,9 +687,9 @@ function App() {
             path="/recipes" 
             element={
               <RecipesPage 
+                aggregatedItems={aggregatedItems}
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
-                ingredientLibrary={ingredientLibrary}
                 recipes={recipes}
                 preference={preference}
               />
@@ -568,7 +703,7 @@ function App() {
           {/* Inventory Page */}
           <Route 
             path="/inventory" 
-            element={<InventoryPage inventory={inventory} />} 
+            element={<InventoryPage inventory={aggregatedItems} />} 
           />
         </Routes>
         

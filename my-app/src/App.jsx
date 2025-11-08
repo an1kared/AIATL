@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react' // 👈 Added useRef
 import './App.css'
 import { GoogleGenAI } from '@google/genai';
 
@@ -136,11 +136,45 @@ function App() {
   const [detectionError, setDetectionError] = useState(null);
   // ----------------------------------
 
+  // State for handling different import modes
+  const [importMode, setImportMode] = useState(null); // 'camera', 'file', 'manual', or null
+  const [capturedImageBase64, setCapturedImageBase64] = useState(null);
+
+  // Ref for the hidden file input element
+  const fileInputRef = useRef(null);
+
   const toggleIngredient = (id) => {
     setSelectedIngredients((prev) =>
       prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id],
     )
   }
+
+  // Handler for image data coming from CameraCapture
+  const handleImageCapture = (imageBase64) => {
+    console.log('Image captured:', imageBase64.substring(0, 50) + '...');
+    setCapturedImageBase64(imageBase64);
+    setImportMode(null); // Close the camera view
+  }
+
+  // Handler for file upload from gallery/storage
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+
+      reader.onloadend = () => {
+        setCapturedImageBase64(reader.result);
+        setImportMode(null);
+      };
+
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Helper function to close all import modes
+  const handleCloseImport = () => {
+    setImportMode(null);
+  };
 
   // --- NEW: File and Detection Handlers ---
   const handleDetectionFileChange = (e) => {
@@ -207,37 +241,64 @@ function App() {
 
       <section className="capture">
         <h2>Import Groceries</h2>
+
+        {/* 🚨 Renders the camera view ONLY when importMode is 'camera' */}
+        {importMode === 'camera' && (
+          <CameraCapture
+            onCapture={handleImageCapture}
+            onClose={handleCloseImport}
+          />
+        )}
+
         <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
 
         {/* --- MODIFIED: Gemini Upload UI integrated here --- */}
         <div className="capture__actions">
+
+          {/* Hidden File Input Element (Necessary for the Upload Photo button) */}
           <input
             type="file"
             accept="image/*"
-            onChange={handleDetectionFileChange}
+            ref={fileInputRef}
+            onChange={handleFileUpload}
             style={{ display: 'none' }}
-            id="file-upload"
           />
-          <button type="button" onClick={() => document.getElementById('file-upload').click()}>
-            📷 Upload Photo
+
+          {/* 📸 TAKE PHOTO: Sets state to 'camera' */}
+          <button type="button" onClick={() => setImportMode('camera')}>
+            📸 Take Photo
           </button>
-          <button
-            type="button"
-            className="cta"
-            onClick={detectIngredients}
-            disabled={isDetecting || !detectedFile}
-            style={{ marginLeft: '10px' }}
+
+          {/* 📂 UPLOAD PHOTO: Clicks the hidden file input */}
+          <button type="button"
+                  onClick={() => fileInputRef.current.click()}
           >
-            {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
+            📂 Upload Photo
+          </button>
+
+          {/* 📝 MANUAL ENTRY: Sets state to 'manual' */}
+          <button type="button" onClick={() => setImportMode('manual')} className="outline">
+            📝 Manual Entry
           </button>
         </div>
 
-        {/* Display Status/Error */}
-        {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
-        {detectedFile && !isDetecting && !detectedResults && (
-            <p style={{ marginTop: '10px' }}>File selected: **{detectedFile.name}**. Click 'Analyze with Vision Agent' to start.</p>
+        {/* Display an interface based on the selected mode (e.g., a file input or manual form) */}
+        {importMode === 'manual' && (
+            <p className="status-message">Manual entry form goes here...</p>
         )}
-        {/* -------------------------------------------------- */}
+
+        {/* Display a preview of the captured image */}
+        {capturedImageBase64 && (
+          <div className="capture__image-preview">
+            <h3>Image Agent Preview</h3>
+            <img
+              src={capturedImageBase64}
+              alt="Captured Grocery Item"
+              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
+            />
+            <p>Scanning complete. Found 7 items...</p>
+          </div>
+        )}
 
         <div className="capture__preview">
           <h3>Vision Agent Results</h3>

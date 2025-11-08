@@ -17,29 +17,37 @@ const ai = new GoogleGenAI({ apiKey });
 
 // Define the desired structured output schema for item name and count
 const ingredientSchema = {
-  type: "object",
+  type: 'object',
   properties: {
     groceries: {
-      type: "array",
-      description: "A list of all individual grocery items detected in the image.",
+      type: 'array',
+      description: 'A list of all individual grocery items detected in the image.',
       items: {
-        type: "object",
+        type: 'object',
         properties: {
           item_name: {
-            type: "string",
-            description: "The common name of the detected ingredient or grocery product (e.g., 'Gala Apple', 'Can of Black Beans', 'Dozen Eggs').",
+            type: 'string',
+            description:
+              "The common name of the detected ingredient or grocery product (e.g., 'Gala Apple', 'Can of Black Beans', 'Dozen Eggs').",
           },
           item_count: {
-            type: "number",
-            description: "The quantity or count of the specific item detected (e.g., 3 for 3 apples, 1 for 1 box of cereal).",
+            type: 'number',
+            description:
+              'The quantity or count of the specific item detected (e.g., 3 for 3 apples, 1 for 1 box of cereal).',
+          },
+          storage_location: {
+            type: 'string',
+            enum: ['Fridge', 'Pantry'],
+            description:
+              "Where the item should be stored. Return only 'Fridge' for refrigerated/frozen goods or 'Pantry' for shelf-stable items.",
           },
         },
-        required: ["item_name", "item_count"],
+        required: ['item_name', 'item_count', 'storage_location'],
       },
     },
   },
-  required: ["groceries"],
-};
+  required: ['groceries'],
+}
 // ------------------------------------------
 
 
@@ -108,8 +116,8 @@ function CapturePage({
     // PASSED GEMINI PROPS:
     detectIngredients, detectedResults, isDetecting, detectionError 
 }) {
-    return (
-        <>
+  return (
+    <>
             <header className="hero">
                 <div className="hero__badge">Smart Kitchen Agents</div>
                 <h1>Your Personal Fridge Companion</h1>
@@ -123,7 +131,7 @@ function CapturePage({
                     <span>🥗 Recipe Agent</span>
                     <span>📊 Nutrition Agent</span>
                     <span>🛒 Grocery Agent</span>
-                </div>
+      </div>
             </header>
             <section className="capture">
                 <h2>Import Groceries</h2>
@@ -146,7 +154,7 @@ function CapturePage({
                       style={{ marginLeft: '10px' }}
                     >
                       {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
-                    </button>
+        </button>
 
                 </div>
                 {importMode === 'manual' && (
@@ -170,12 +178,32 @@ function CapturePage({
 
                     {detectedResults ? (
                         <>
-                            <p>✅ **{detectedResults.length}** items successfully scanned:</p>
+                            <p>
+                              📅 Captured on{' '}
+                              <strong>
+                                {detectedResults.captured_date
+                                  ? new Date(detectedResults.captured_date).toLocaleString(undefined, {
+                                      dateStyle: 'medium',
+                                      timeStyle: 'short',
+                                    })
+                                  : 'Unknown time'}
+                              </strong>
+                            </p>
+                            <p>
+                              ✅ <strong>{detectedResults.groceries.length}</strong> items successfully categorized:
+                            </p>
                             <ul>
-                                {detectedResults.map((item, index) => (
+                                {detectedResults.groceries.map((item, index) => (
                                     <li key={index}>
                                         <span>{item.item_name}</span>
                                         <span className="chip">{item.item_count} units</span>
+                                        <span
+                                          className={`chip ${
+                                            item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
+                                          }`}
+                                        >
+                                          {item.storage_location}
+                                        </span>
                                     </li>
                                 ))}
                             </ul>
@@ -287,7 +315,7 @@ function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary,
                             </article>
                         </Link>
                     ))}
-                </div>
+      </div>
             </section>
         </>
     );
@@ -340,16 +368,16 @@ function RecipeDetailPage({ recipes }) {
 
 function App() {
   // Shared State and Refs
-  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
-  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
-  const [importMode, setImportMode] = useState(null);
-  const [capturedImageBase64, setCapturedImageBase64] = useState(null);
-  const fileInputRef = useRef(null); 
-  
+  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
+  const [importMode, setImportMode] = useState(null)
+  const [capturedImageBase64, setCapturedImageBase64] = useState(null)
+  const [captureTimestamp, setCaptureTimestamp] = useState(null)
+  const fileInputRef = useRef(null)
+
   // Gemini Detection State
-  const [detectedResults, setDetectedResults] = useState(null);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectionError, setDetectionError] = useState(null);
+  const [detectedResults, setDetectedResults] = useState(null)
+  const [isDetecting, setIsDetecting] = useState(false)
+  const [detectionError, setDetectionError] = useState(null)
 
 
   // Handler Functions
@@ -360,9 +388,10 @@ function App() {
   }
   
   const handleImageCapture = (imageBase64) => {
-    setCapturedImageBase64(imageBase64);
-    setDetectedResults(null); // Clear previous results on new image
-    setImportMode(null);
+    setCapturedImageBase64(imageBase64)
+    setDetectedResults(null) // Clear previous results on new image
+    setCaptureTimestamp(new Date().toISOString())
+    setImportMode(null)
   }
 
   const handleCloseImport = () => {
@@ -374,10 +403,11 @@ function App() {
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setCapturedImageBase64(reader.result);
-        setDetectedResults(null); // Clear previous results on new image
-        if (fileInputRef.current) fileInputRef.current.value = null;
-        setImportMode(null);
+        setCapturedImageBase64(reader.result)
+        setDetectedResults(null) // Clear previous results on new image
+        setCaptureTimestamp(new Date().toISOString())
+        if (fileInputRef.current) fileInputRef.current.value = null
+        setImportMode(null)
       };
       reader.readAsDataURL(file);
     }
@@ -414,7 +444,8 @@ function App() {
       };
 
 
-      const prompt = "Identify and count every distinct grocery item in the image. Return only the structured JSON requested in the schema.";
+      const prompt =
+        'Identify every distinct grocery item in the photo, count how many of each you see, and determine whether each belongs in the fridge (cold/frozen goods) or pantry (shelf-stable/dry goods). Return only the structured JSON that matches the provided schema.'
 
 
       const response = await ai.models.generateContent({
@@ -427,11 +458,15 @@ function App() {
       });
 
 
-      const jsonResponse = JSON.parse(response.text);
-      setDetectedResults(jsonResponse.groceries);
+      const jsonResponse = JSON.parse(response.text)
+      const capturedDate = captureTimestamp || new Date().toISOString()
+      const payload = {
+        captured_date: capturedDate,
+        groceries: jsonResponse.groceries || [],
+      }
+      setDetectedResults(payload)
 
-
-      console.log("Gemini Detection Successful. Raw Data (Name and Count):", jsonResponse.groceries);
+      console.log('Gemini Detection Successful. Payload:', payload)
 
 
     } catch (err) {

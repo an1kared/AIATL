@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom';
 import './App.css';
 import { CameraCapture } from './CameraCapture'; // Assuming CameraCapture is available
@@ -56,16 +56,6 @@ const ingredientSchema = {
 // ------------------------------------------
 
 // --- CONSTANTS (DUMMY DATA) ---
-const ingredientLibrary = [
-  { id: 'eggs', label: '🥚 Eggs', storage: 'Fridge' },
-  { id: 'spinach', label: '🥬 Spinach', storage: 'Fridge' },
-  { id: 'tomato', label: '🍅 Tomato', storage: 'Pantry' },
-  { id: 'pasta', label: '🍝 Pasta', storage: 'Pantry' },
-  { id: 'salmon', label: '🐟 Salmon', storage: 'Fridge' },
-  { id: 'yogurt', label: '🥛 Yogurt', storage: 'Fridge' },
-  { id: 'avocado', label: '🥑 Avocado', storage: 'Pantry' },
-]
-
 const recipes = [
   {
     id: 'salmon-bowl',
@@ -103,11 +93,54 @@ const recipes = [
   },
 ]
 
+function aggregateDetections(detections = []) {
+  const map = new Map()
+
+  detections.forEach((detection) => {
+    if (!Array.isArray(detection?.groceries)) return
+
+    detection.groceries.forEach((item) => {
+      const itemName = (item?.item_name || '').trim()
+      const storageLocation = (item?.storage_location || '').trim()
+
+      if (!itemName || !storageLocation) {
+        return
+      }
+
+      const key = `${itemName.toLowerCase()}|${storageLocation.toLowerCase()}`
+      const existing = map.get(key) || {
+        item_name: itemName,
+        storage_location: storageLocation,
+        item_count: 0,
+        emoji: '',
+      }
+
+      const count = Number(item?.item_count)
+      if (!Number.isNaN(count) && Number.isFinite(count) && count > 0) {
+        existing.item_count += count
+      }
+
+      if (!existing.emoji && item?.emoji) {
+        existing.emoji = item.emoji
+      }
+
+      map.set(key, existing)
+    })
+  })
+
+  return Array.from(map.values())
+    .map((entry) => ({
+      ...entry,
+      emoji: entry.emoji?.trim() || '🛒',
+    }))
+    .sort((a, b) => a.item_name.localeCompare(b.item_name))
+}
+
 // --- PAGE COMPONENTS ---
 
 function CapturePage({ 
     handleImageCapture, handleCloseImport, capturedImageBase64, 
-    importMode, setImportMode, fileInputRef, handleFileUpload, inventoryItems, storedDetections,
+    importMode, setImportMode, fileInputRef, handleFileUpload, aggregatedItems,
     // PASSED GEMINI PROPS:
     detectIngredients, detectedResults, isDetecting, detectionError 
 }) {
@@ -142,7 +175,7 @@ function CapturePage({
       <p className="storage-card__empty">{emptyLabel}</p>
     )
 
-  const inventoryBuckets = buildStorageBuckets(inventoryItems)
+  const inventoryBuckets = buildStorageBuckets(aggregatedItems)
 
   return (
     <>
@@ -253,44 +286,6 @@ function CapturePage({
                     </div>
                   </div>
                 </div>
-                <div className="capture__preview" style={{ marginTop: '24px' }}>
-                    <h3>Stored Detections</h3>
-                    {storedDetections.length === 0 ? (
-                        <p>No detections saved yet.</p>
-                    ) : (
-                        <ul>
-                            {storedDetections.map((detection) => (
-                                <li key={detection._id ?? detection.id ?? detection.captured_date}>
-                                    <ul>
-                                        {Array.isArray(detection.groceries) && detection.groceries.length > 0 ? (
-                                            detection.groceries.map((item, idx) => (
-                                                <li
-                                                    key={`${detection._id ?? detection.captured_date}-${idx}`}
-                                                    style={{ display: 'flex', gap: '8px', alignItems: 'center' }}
-                                                >
-                                                    <span>
-                                                      {(item?.emoji && item.emoji.trim() ? item.emoji.trim() : '🛒')}{' '}
-                                                      {item.item_name}
-                                                    </span>
-                                                    <span className="chip">{item.item_count} units</span>
-                                                    <span
-                                                        className={`chip ${
-                                                            item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
-                                                        }`}
-                                                    >
-                                                        {item.storage_location}
-                                                    </span>
-                                                </li>
-                                            ))
-                                        ) : (
-                                            <li>No grocery items stored for this detection.</li>
-                                        )}
-                                    </ul>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
             </section>
         </>
     );
@@ -329,30 +324,49 @@ function InventoryPage({ inventory }) {
     );
 }
 
-function RecipesPage({ selectedIngredients, toggleIngredient, ingredientLibrary, recipes }) {
+function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, recipes }) {
+    const ingredientOptions = Array.from(
+        aggregatedItems.reduce((map, item) => {
+            const key = item.item_name.trim().toLowerCase()
+            if (!map.has(key)) {
+                map.set(key, {
+                    id: key,
+                    label: `${(item.emoji && item.emoji.trim()) || '🛒'} ${item.item_name}`,
+                })
+            }
+            return map
+        }, new Map()).values()
+    )
+
     return (
         <>
             <section className="selector">
                 <div className="selector__head">
                     <h2>What&apos;s on the menu?</h2>
-                    <p>Tap to include must-have ingredients. Agents auto-fill the rest.</p>
+                    <p>Select ingredients detected in your fridge or pantry to personalize recipe ideas.</p>
                 </div>
                 <div className="chips">
-                    {ingredientLibrary.map((ingredient) => {
-                        const active = selectedIngredients.includes(ingredient.id)
-                        return (
-                            <button
-                                type="button"
-                                key={ingredient.id}
-                                className={`chip-button ${active ? 'active' : ''}`}
-                                onClick={() => toggleIngredient(ingredient.id)}
-                            >
-                                {ingredient.label}
-                            </button>
-                        )
-                    })}
+                    {ingredientOptions.length === 0 ? (
+                        <p style={{ margin: 0 }}>Run a detection to load ingredient chips.</p>
+                    ) : (
+                        ingredientOptions.map((ingredient) => {
+                            const active = selectedIngredients.includes(ingredient.id)
+                            return (
+                                <button
+                                    type="button"
+                                    key={ingredient.id}
+                                    className={`chip-button ${active ? 'active' : ''}`}
+                                    onClick={() => toggleIngredient(ingredient.id)}
+                                >
+                                    {ingredient.label}
+                                </button>
+                            )
+                        })
+                    )}
                 </div>
-                <button type="button" className="cta">Let&apos;s Cook</button>
+                <button type="button" className="cta" disabled={ingredientOptions.length === 0}>
+                    Let&apos;s Cook
+                </button>
             </section>
 
             <section className="recipes">
@@ -440,7 +454,7 @@ function RecipeDetailPage({ recipes }) {
 
 function App() {
   // Shared State and Refs
-  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
+  const [selectedIngredients, setSelectedIngredients] = useState([])
   const [importMode, setImportMode] = useState(null)
   const [capturedImageBase64, setCapturedImageBase64] = useState(null)
   const [captureTimestamp, setCaptureTimestamp] = useState(null)
@@ -450,31 +464,33 @@ function App() {
   const [detectedResults, setDetectedResults] = useState(null)
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionError, setDetectionError] = useState(null)
-  const [storedDetections, setStoredDetections] = useState([])
-  const [inventoryItems, setInventoryItems] = useState([])
+  const [detections, setDetections] = useState([])
 
   useEffect(() => {
-    const fetchInventory = async () => {
+    const fetchDetections = async () => {
       try {
         const response = await fetch('/api/detections')
         if (!response.ok) {
-          throw new Error(`Failed to fetch inventory: ${response.status}`)
+          throw new Error(`Failed to fetch detections: ${response.status}`)
         }
 
         const data = await response.json()
-        const inventory = Array.isArray(data?.inventory) ? data.inventory : []
-        const detections = Array.isArray(data?.detections) ? data.detections : []
+        const detectionsResponse = Array.isArray(data?.detections)
+          ? data.detections
+          : Array.isArray(data)
+            ? data
+            : []
 
-        setInventoryItems(inventory)
-        setStoredDetections(detections)
+        setDetections(detectionsResponse)
       } catch (error) {
-        console.error('Unable to load inventory from API:', error)
+        console.error('Unable to load detections from API:', error)
       }
     }
 
-    fetchInventory()
+    fetchDetections()
   }, [])
 
+  const aggregatedItems = useMemo(() => aggregateDetections(detections), [detections])
 
   // Handler Functions
   const toggleIngredient = (id) => {
@@ -576,12 +592,9 @@ function App() {
         console.log('Gemini Detection saved to MongoDB.')
         const responseBody = await response.json().catch(() => null)
         if (responseBody?.detection) {
-          setStoredDetections((prev) => [responseBody.detection, ...prev])
+          setDetections((prev) => [responseBody.detection, ...prev])
         } else {
-          setStoredDetections((prev) => [payload, ...prev])
-        }
-        if (Array.isArray(responseBody?.inventory)) {
-          setInventoryItems(responseBody.inventory)
+          setDetections((prev) => [payload, ...prev])
         }
       } catch (persistError) {
         console.error('Failed to persist detection:', persistError)
@@ -624,8 +637,7 @@ function App() {
                 setImportMode={setImportMode}
                 fileInputRef={fileInputRef}
                 handleFileUpload={handleFileUpload}
-                inventoryItems={inventoryItems}
-                storedDetections={storedDetections}
+                aggregatedItems={aggregatedItems}
                 
                 // PASS GEMINI PROPS:
                 detectedResults={detectedResults}
@@ -640,9 +652,9 @@ function App() {
             path="/recipes" 
             element={
               <RecipesPage 
+                aggregatedItems={aggregatedItems}
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
-                ingredientLibrary={ingredientLibrary}
                 recipes={recipes}
               />
             } 
@@ -655,7 +667,7 @@ function App() {
           {/* Inventory Page */}
           <Route 
             path="/inventory" 
-            element={<InventoryPage inventory={inventoryItems} />} 
+            element={<InventoryPage inventory={aggregatedItems} />} 
           />
         </Routes>
         

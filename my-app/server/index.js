@@ -7,13 +7,7 @@ import dotenv from 'dotenv'
 import { ObjectId } from 'mongodb'
 import { fileURLToPath } from 'url'
 import path from 'path'
-import {
-  getCollection,
-  closeDatabase,
-  upsertInventoryItems,
-  listInventoryItems,
-  decrementInventoryItems,
-} from './databaseClient.js'
+import { getCollection, closeDatabase } from './databaseClient.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, '.env') })
@@ -26,12 +20,8 @@ app.use(express.json())
 app.get('/api/detections', async (req, res) => {
   try {
     const collection = await getCollection()
-    const [inventoryItems, detections] = await Promise.all([
-      listInventoryItems(),
-      collection.find().sort({ captured_date: -1 }).toArray(),
-    ])
-
-    res.json({ inventory: inventoryItems, detections })
+    const detections = await collection.find().sort({ captured_date: -1 }).toArray()
+    res.json({ detections })
   } catch (error) {
     console.error('Failed to fetch detections', error)
     res.status(500).json({ error: 'Failed to fetch detections' })
@@ -57,13 +47,7 @@ app.post('/api/detections', async (req, res) => {
     const collection = await getCollection()
     const result = await collection.insertOne(document)
 
-    await upsertInventoryItems(document.groceries)
-    const inventoryItems = await listInventoryItems()
-
-    res.status(201).json({
-      detection: { ...document, _id: result.insertedId },
-      inventory: inventoryItems,
-    })
+    res.status(201).json({ detection: { ...document, _id: result.insertedId } })
   } catch (error) {
     console.error('Failed to save detection', error)
     res.status(500).json({ error: 'Failed to save detection' })
@@ -81,10 +65,7 @@ app.delete('/api/detections/:id', async (req, res) => {
     }
 
     await collection.deleteOne({ _id: detection._id })
-    await decrementInventoryItems(detection.groceries)
-    const inventoryItems = await listInventoryItems()
-
-    res.status(200).json({ inventory: inventoryItems })
+    res.status(204).end()
   } catch (error) {
     console.error('Failed to delete detection', error)
     res.status(500).json({ error: 'Failed to delete detection' })

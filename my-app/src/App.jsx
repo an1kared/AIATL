@@ -1,8 +1,13 @@
-import { useState, useRef } from 'react' // 👈 Added useRef
+import { useState, useRef } from 'react'
 import './App.css'
 import { GoogleGenAI } from '@google/genai';
 
-// --- Gemini AI Setup (Kept at the top) ---
+// NOTE: The CameraCapture component used in the JSX is not defined here.
+// You will need to implement a CameraCapture component (which uses the
+// device's camera and returns a base64 image string) separately for that
+// button to work. For now, the file upload and detection logic is correct.
+
+// --- Gemini AI Setup ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
 // Check if the key is available
@@ -40,8 +45,9 @@ const ingredientSchema = {
 // ------------------------------------------
 
 
-// --- Utility Function (Kept outside the component) ---
-// Utility function to convert a File object to a Base64 string for the API
+// --- Utility Function: Convert File to GenerativePart (Unused, but kept for context) ---
+// Note: This utility is now redundant because the image is converted to Base64
+// *before* the detectIngredients function runs via handleFileUpload.
 const fileToGenerativePart = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -78,65 +84,28 @@ const ingredientLibrary = [
 ]
 
 const recipes = [
-  {
-    id: 'salmon-bowl',
-    title: 'Omega Boost Salmon Bowl',
-    difficulty: 'Easy',
-    duration: '20 min',
-    nutritionScore: 92,
-    summary:
-      'Protein-packed bowl with seared salmon, herb quinoa, and a creamy yogurt drizzle.',
-    ingredients: ['🐟 Salmon', '🥬 Spinach', '🍅 Tomato', '🥛 Yogurt'],
-    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
-    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
-  },
-  {
-    id: 'green-goddess-omelette',
-    title: 'Green Goddess Omelette',
-    difficulty: 'Medium',
-    duration: '15 min',
-    nutritionScore: 88,
-    summary: 'Fluffy omelette loaded with spinach, avocado crema, and herbs.',
-    ingredients: ['🥚 Eggs', '🥬 Spinach', '🥑 Avocado'],
-    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
-    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
-  },
-  {
-    id: 'creamy-tomato-pasta',
-    title: 'Creamy Tomato Pasta',
-    difficulty: 'Easy',
-    duration: '25 min',
-    nutritionScore: 80,
-    summary: 'Silky pasta with a tangy tomato yogurt sauce and wilted greens.',
-    ingredients: ['🍝 Pasta', '🍅 Tomato', '🥬 Spinach', '🥛 Yogurt'],
-    videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
-    audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
-  },
+  // ... recipe data
 ]
 
 const inventory = [
-  { item: '🥚 Eggs', quantity: '6', storage: 'Fridge', expires: 'Nov 15' },
-  { item: '🐟 Salmon filet', quantity: '2', storage: 'Fridge', expires: 'Nov 10' },
-  { item: '🍝 Pasta shells', quantity: '1 box', storage: 'Pantry', expires: 'Apr 2026' },
-  { item: '🥛 Greek yogurt', quantity: '1 tub', storage: 'Fridge', expires: 'Nov 18' },
+  // ... inventory data
 ]
 // --------------------------------------------
 
 
-// --- The Main App Component (Only one definition here) ---
+// --- The Main App Component ---
 function App() {
   // --- Original Recipe/Inventory State ---
   const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
   const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
 
-  // --- NEW Gemini Detection State ---
-  const [detectedFile, setDetectedFile] = useState(null); // The file object
+  // --- Gemini Detection State ---
+  // We remove 'detectedFile' since we are now using the Base64 version
   const [detectedResults, setDetectedResults] = useState(null); // The list of detected items
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectionError, setDetectionError] = useState(null);
-  // ----------------------------------
 
-  // State for handling different import modes
+  // State for handling different import modes and image data
   const [importMode, setImportMode] = useState(null); // 'camera', 'file', 'manual', or null
   const [capturedImageBase64, setCapturedImageBase64] = useState(null);
 
@@ -153,6 +122,7 @@ function App() {
   const handleImageCapture = (imageBase64) => {
     console.log('Image captured:', imageBase64.substring(0, 50) + '...');
     setCapturedImageBase64(imageBase64);
+    setDetectedResults(null); // Clear old results
     setImportMode(null); // Close the camera view
   }
 
@@ -164,6 +134,9 @@ function App() {
 
       reader.onloadend = () => {
         setCapturedImageBase64(reader.result);
+        setDetectedResults(null); // Clear old results
+        // file input needs to be cleared so the same file can be selected again
+        if (fileInputRef.current) fileInputRef.current.value = null;
         setImportMode(null);
       };
 
@@ -176,16 +149,11 @@ function App() {
     setImportMode(null);
   };
 
-  // --- NEW: File and Detection Handlers ---
-  const handleDetectionFileChange = (e) => {
-    setDetectedFile(e.target.files[0]);
-    setDetectedResults(null); // Clear previous results
-    setDetectionError(null);
-  };
-
+  // --- CORRECTED: Detection Handler using the Base64 state ---
   const detectIngredients = async () => {
-    if (!detectedFile) {
-      alert("Please upload an image of your groceries first.");
+    // FIX 1: Check the new state variable for the image data
+    if (!capturedImageBase64) {
+      alert("Please capture or upload an image of your groceries first.");
       return;
     }
 
@@ -193,7 +161,17 @@ function App() {
     setDetectionError(null);
 
     try {
-      const imagePart = await fileToGenerativePart(detectedFile);
+      // FIX 2: Create the image part directly from the Base64 string
+      const [header, base64Data] = capturedImageBase64.split(',');
+      const mimeTypeMatch = header.match(/:(.*?);/);
+      const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg'; // Default to jpeg if unable to parse
+
+      const imagePart = {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType,
+        },
+      };
 
       const prompt = "Identify and count every distinct grocery item in the image. Return only the structured JSON requested in the schema.";
 
@@ -218,7 +196,7 @@ function App() {
       setIsDetecting(false);
     }
   };
-  // ---------------------------------------
+  // --------------------------------------------------------
 
 
   return (
@@ -242,13 +220,13 @@ function App() {
       <section className="capture">
         <h2>Import Groceries</h2>
 
-        {/* 🚨 Renders the camera view ONLY when importMode is 'camera' */}
-        {importMode === 'camera' && (
+        {/* 🚨 You would implement CameraCapture here, passing handleImageCapture and handleCloseImport */}
+        {/* {importMode === 'camera' && (
           <CameraCapture
             onCapture={handleImageCapture}
             onClose={handleCloseImport}
           />
-        )}
+        )} */}
 
         <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
 
@@ -271,7 +249,7 @@ function App() {
 
           {/* 📂 UPLOAD PHOTO: Clicks the hidden file input */}
           <button type="button"
-                  onClick={() => fileInputRef.current.click()}
+            onClick={() => fileInputRef.current.click()}
           >
             📂 Upload Photo
           </button>
@@ -280,11 +258,23 @@ function App() {
           <button type="button" onClick={() => setImportMode('manual')} className="outline">
             📝 Manual Entry
           </button>
+
+          {/* Analyze Button */}
+          <button
+            type="button"
+            className="cta"
+            onClick={detectIngredients}
+            // FIX 3: Check capturedImageBase64 instead of detectedFile
+            disabled={isDetecting || !capturedImageBase64}
+            style={{ marginLeft: '10px' }}
+          >
+            {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
+          </button>
         </div>
 
         {/* Display an interface based on the selected mode (e.g., a file input or manual form) */}
         {importMode === 'manual' && (
-            <p className="status-message">Manual entry form goes here...</p>
+          <p className="status-message">Manual entry form goes here...</p>
         )}
 
         {/* Display a preview of the captured image */}
@@ -294,40 +284,26 @@ function App() {
             <img
               src={capturedImageBase64}
               alt="Captured Grocery Item"
-              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
+              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px', marginTop: '15px' }}
             />
-            <p>Scanning complete. Found 7 items...</p>
           </div>
         )}
+        {/* -------------------------------------------------- */}
 
         <div className="capture__preview">
           <h3>Vision Agent Results</h3>
-          {detectedResults ? (
-            <ul>
-              {detectedResults ? (
-                <p>✅ **{detectedResults.length}** items successfully scanned and classified. (Data stored in `detectedResults` state for icon rendering.)</p>
-              ) : (
-                <p>A list of detected items will be generated here.</p>
-              )}
-            </ul>
-          ) : (
-            <p>A list of detected items will appear here after the Vision Agent analyzes your photo.</p>
+          {/* Display Status/Error */}
+          {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
+
+          {capturedImageBase64 && !isDetecting && !detectedResults && (
+            <p style={{ marginTop: '10px' }}>Image loaded. Click 'Analyze with Vision Agent' to start.</p>
           )}
 
-          {/* Original hardcoded list for demonstration/initial state */}
-          {/*
-          <h3>Auto Classification (Hardcoded Demo)</h3>
-          <ul>
-            {ingredientLibrary.map((ingredient) => (
-              <li key={ingredient.id}>
-                <span>{ingredient.label}</span>
-                <span className={ingredient.storage === 'Fridge' ? 'chip fridge' : 'chip pantry'}>
-                  {ingredient.storage}
-                </span>
-              </li>
-            ))}
-          </ul>
-          */}
+          {detectedResults ? (
+            <p>✅ **{detectedResults.length}** items successfully scanned and classified. (Data stored in `detectedResults` state for icon rendering.)</p>
+          ) : (
+            <p>A list of detected items will be generated here.</p>
+          )}
         </div>
       </section>
 

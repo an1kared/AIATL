@@ -1,6 +1,72 @@
 import { useState } from 'react'
 import './App.css'
+import { GoogleGenAI } from '@google/genai';
 
+// --- Gemini AI Setup (Kept at the top) ---
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Check if the key is available
+if (!apiKey) {
+  throw new Error("VITE_GEMINI_API_KEY is not set in .env.local");
+}
+
+const ai = new GoogleGenAI({ apiKey });
+
+// Define the desired structured output schema
+const ingredientSchema = {
+  type: "object",
+  properties: {
+    groceries: {
+      type: "array",
+      description: "A list of all individual grocery items detected in the image.",
+      items: {
+        type: "object",
+        properties: {
+          item_name: {
+            type: "string",
+            description: "The common name of the detected ingredient or grocery product (e.g., 'Gala Apple', 'Can of Black Beans', 'Dozen Eggs').",
+          },
+          item_count: {
+            type: "number",
+            description: "The quantity or count of the specific item detected (e.g., 3 for 3 apples, 1 for 1 box of cereal).",
+          },
+        },
+        required: ["item_name", "item_count"],
+      },
+    },
+  },
+  required: ["groceries"],
+};
+// ------------------------------------------
+
+
+// --- Utility Function (Kept outside the component) ---
+// Utility function to convert a File object to a Base64 string for the API
+const fileToGenerativePart = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      // The Base64 string is everything after the comma
+      const base64Data = reader.result.split(',')[1];
+      resolve({
+        inlineData: {
+          data: base64Data,
+          mimeType: file.type, // e.g., 'image/jpeg'
+        },
+      });
+    };
+
+    reader.onerror = (error) => reject(error);
+
+    // Read the file as a Data URL, which includes the Base64 string
+    reader.readAsDataURL(file);
+  });
+};
+// ----------------------------------------------------
+
+
+// --- Mock Data (Kept outside the component) ---
 const ingredientLibrary = [
   { id: 'eggs', label: '🥚 Eggs', storage: 'Fridge' },
   { id: 'spinach', label: '🥬 Spinach', storage: 'Fridge' },
@@ -54,16 +120,72 @@ const inventory = [
   { item: '🍝 Pasta shells', quantity: '1 box', storage: 'Pantry', expires: 'Apr 2026' },
   { item: '🥛 Greek yogurt', quantity: '1 tub', storage: 'Fridge', expires: 'Nov 18' },
 ]
+// --------------------------------------------
 
+
+// --- The Main App Component (Only one definition here) ---
 function App() {
-  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
-  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0])
+  // --- Original Recipe/Inventory State ---
+  const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon']);
+  const [focusedRecipe, setFocusedRecipe] = useState(recipes[0]);
+
+  // --- NEW Gemini Detection State ---
+  const [detectedFile, setDetectedFile] = useState(null); // The file object
+  const [detectedResults, setDetectedResults] = useState(null); // The list of detected items
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionError, setDetectionError] = useState(null);
+  // ----------------------------------
 
   const toggleIngredient = (id) => {
     setSelectedIngredients((prev) =>
       prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id],
     )
   }
+
+  // --- NEW: File and Detection Handlers ---
+  const handleDetectionFileChange = (e) => {
+    setDetectedFile(e.target.files[0]);
+    setDetectedResults(null); // Clear previous results
+    setDetectionError(null);
+  };
+
+  const detectIngredients = async () => {
+    if (!detectedFile) {
+      alert("Please upload an image of your groceries first.");
+      return;
+    }
+
+    setIsDetecting(true);
+    setDetectionError(null);
+
+    try {
+      const imagePart = await fileToGenerativePart(detectedFile);
+
+      const prompt = "Identify and count every distinct grocery item in the image. Return only the structured JSON requested in the schema.";
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [imagePart, { text: prompt }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: ingredientSchema,
+        },
+      });
+
+      const jsonResponse = JSON.parse(response.text);
+      setDetectedResults(jsonResponse.groceries);
+
+      console.log("Gemini Detection Successful. Raw Data (Name and Count):", jsonResponse.groceries);
+
+    } catch (err) {
+      console.error("Gemini API Error:", err);
+      setDetectionError("Failed to detect ingredients. Check the console for details.");
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+  // ---------------------------------------
+
 
   return (
     <main className="app">
@@ -86,14 +208,54 @@ function App() {
       <section className="capture">
         <h2>Import Groceries</h2>
         <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
+
+        {/* --- MODIFIED: Gemini Upload UI integrated here --- */}
         <div className="capture__actions">
-          <button type="button">📷 Upload Photo</button>
-          <button type="button" className="outline">
-            📝 Manual Entry
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleDetectionFileChange}
+            style={{ display: 'none' }}
+            id="file-upload"
+          />
+          <button type="button" onClick={() => document.getElementById('file-upload').click()}>
+            📷 Upload Photo
+          </button>
+          <button
+            type="button"
+            className="cta"
+            onClick={detectIngredients}
+            disabled={isDetecting || !detectedFile}
+            style={{ marginLeft: '10px' }}
+          >
+            {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
           </button>
         </div>
+
+        {/* Display Status/Error */}
+        {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
+        {detectedFile && !isDetecting && !detectedResults && (
+            <p style={{ marginTop: '10px' }}>File selected: **{detectedFile.name}**. Click 'Analyze with Vision Agent' to start.</p>
+        )}
+        {/* -------------------------------------------------- */}
+
         <div className="capture__preview">
-          <h3>Auto Classification</h3>
+          <h3>Vision Agent Results</h3>
+          {detectedResults ? (
+            <ul>
+              {detectedResults ? (
+                <p>✅ **{detectedResults.length}** items successfully scanned and classified. (Data stored in `detectedResults` state for icon rendering.)</p>
+              ) : (
+                <p>A list of detected items will be generated here.</p>
+              )}
+            </ul>
+          ) : (
+            <p>A list of detected items will appear here after the Vision Agent analyzes your photo.</p>
+          )}
+
+          {/* Original hardcoded list for demonstration/initial state */}
+          {/*
+          <h3>Auto Classification (Hardcoded Demo)</h3>
           <ul>
             {ingredientLibrary.map((ingredient) => (
               <li key={ingredient.id}>
@@ -104,8 +266,11 @@ function App() {
               </li>
             ))}
           </ul>
+          */}
         </div>
       </section>
+
+      {/* ... The rest of your App UI remains the same ... */}
 
       <section className="selector">
         <div className="selector__head">

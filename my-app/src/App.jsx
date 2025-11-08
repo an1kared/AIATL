@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react' // 👈 Added useRef
 import './App.css'
+import { CameraCapture } from './CameraCapture';
 
 const ingredientLibrary = [
   { id: 'eggs', label: '🥚 Eggs', storage: 'Fridge' },
@@ -58,12 +59,46 @@ const inventory = [
 function App() {
   const [selectedIngredients, setSelectedIngredients] = useState(['eggs', 'spinach', 'salmon'])
   const [focusedRecipe, setFocusedRecipe] = useState(recipes[0])
+  
+  // State for handling different import modes
+  const [importMode, setImportMode] = useState(null); // 'camera', 'file', 'manual', or null
+  const [capturedImageBase64, setCapturedImageBase64] = useState(null); 
+
+  // Ref for the hidden file input element
+  const fileInputRef = useRef(null); 
 
   const toggleIngredient = (id) => {
     setSelectedIngredients((prev) =>
       prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id],
     )
   }
+  
+  // Handler for image data coming from CameraCapture
+  const handleImageCapture = (imageBase64) => {
+    console.log('Image captured:', imageBase64.substring(0, 50) + '...'); 
+    setCapturedImageBase64(imageBase64);
+    setImportMode(null); // Close the camera view
+  }
+
+  // Handler for file upload from gallery/storage
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      
+      reader.onloadend = () => {
+        setCapturedImageBase64(reader.result);
+        setImportMode(null); 
+      };
+      
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Helper function to close all import modes
+  const handleCloseImport = () => {
+    setImportMode(null);
+  };
 
   return (
     <main className="app">
@@ -85,13 +120,63 @@ function App() {
 
       <section className="capture">
         <h2>Import Groceries</h2>
+
+        {/* 🚨 Renders the camera view ONLY when importMode is 'camera' */}
+        {importMode === 'camera' && (
+          <CameraCapture 
+            onCapture={handleImageCapture}
+            onClose={handleCloseImport}
+          />
+        )}
+
         <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
         <div className="capture__actions">
-          <button type="button">📷 Upload Photo</button>
-          <button type="button" className="outline">
+          
+          {/* Hidden File Input Element (Necessary for the Upload Photo button) */}
+          <input
+            type="file"
+            accept="image/*"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            style={{ display: 'none' }}
+          />
+
+          {/* 📸 TAKE PHOTO: Sets state to 'camera' */}
+          <button type="button" onClick={() => setImportMode('camera')}>
+            📸 Take Photo
+          </button>
+          
+          {/* 📂 UPLOAD PHOTO: Clicks the hidden file input */}
+          <button type="button" 
+                  onClick={() => fileInputRef.current.click()}
+          >
+            📂 Upload Photo
+          </button>
+          
+          {/* 📝 MANUAL ENTRY: Sets state to 'manual' */}
+          <button type="button" onClick={() => setImportMode('manual')} className="outline">
             📝 Manual Entry
           </button>
         </div>
+        
+        {/* Display an interface based on the selected mode (e.g., a file input or manual form) */}
+        {importMode === 'manual' && (
+            <p className="status-message">Manual entry form goes here...</p>
+        )}
+
+        {/* Display a preview of the captured image */}
+        {capturedImageBase64 && (
+          <div className="capture__image-preview">
+            <h3>Image Agent Preview</h3>
+            <img 
+              src={capturedImageBase64} 
+              alt="Captured Grocery Item" 
+              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
+            />
+            <p>Scanning complete. Found 7 items...</p>
+          </div>
+        )}
+
         <div className="capture__preview">
           <h3>Auto Classification</h3>
           <ul>

@@ -9,13 +9,16 @@ const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
 // Check if the key is available
 if (!apiKey) {
-  // Use console.error instead of throw new Error to avoid stopping React refresh
   console.error("VITE_GEMINI_API_KEY is not set in .env.local");
 }
 
 const ai = new GoogleGenerativeAI(apiKey);
 
-// Define the desired structured output schema for item name and count
+// --- ADK BACKEND ENDPOINT ---
+// NOTE: Ensure your ADK agent is running on this port (e.g., via 'adk web-runner' or 'npm run start:backend')
+const ADK_ENDPOINT = '/chat'; 
+
+// Define the desired structured output schema for item name and count (Used by Vision Agent)
 const ingredientSchema = {
   type: 'object',
   properties: {
@@ -141,11 +144,17 @@ function aggregateDetections(detections = []) {
 function CapturePage({ 
     handleImageCapture, handleCloseImport, capturedImageBase64, 
     importMode, setImportMode, fileInputRef, handleFileUpload, aggregatedItems,
-    // PASSED GEMINI PROPS:
+    // VISION AGENT PROPS:
     detectIngredients, detectedResults, isDetecting, detectionError,
     // PREFERENCE PROPS:
-    preference, setPreference
+    preference, setPreference,
+    // MANAGER AGENT CHAT PROPS:
+    chatWithAgent, chatInput, setChatInput, chatHistory, isChatting
 }) {
+    // NEW STATE for voice indicator
+    const [isListening, setIsListening] = useState(false); 
+
+
   const buildStorageBuckets = (items = []) => {
     return items.reduce(
       (acc, item) => {
@@ -178,6 +187,45 @@ function CapturePage({
     )
 
   const inventoryBuckets = buildStorageBuckets(aggregatedItems)
+
+    // Function to handle browser's Speech Recognition
+    const startSpeechRecognition = () => {
+        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+            alert('Voice input is not supported in this browser. Please use Chrome or Firefox over HTTPS.');
+            return;
+        }
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        
+        // --- VOICE INDICATOR EVENTS ---
+        recognition.onstart = () => {
+            setIsListening(true); // Mic is active
+            console.log("Listening started.");
+        };
+
+        recognition.onend = () => {
+            setIsListening(false); // Mic stopped
+            console.log("Listening ended.");
+        };
+        // ------------------------------
+        
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            setChatInput(transcript); 
+        };
+        
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            setIsListening(false); // Stop listening state on error
+        };
+
+        recognition.start();
+    };
+
 
   return (
     <>
@@ -218,6 +266,8 @@ function CapturePage({
                 </Link>
               </div>
             </section>
+            
+            {/* --- EXISTING GROCERY IMPORT FUNCTIONALITY --- */}
             <section className="capture">
                 <h2>Import Groceries</h2>
                 {importMode === 'camera' && (
@@ -311,6 +361,86 @@ function CapturePage({
                   </div>
                 </div>
             </section>
+            
+            <hr style={{ margin: '20px 0' }}/> 
+
+            {/* --- NEW MANAGER AGENT CHAT FUNCTIONALITY --- */}
+            <section className="chat-section">
+                <h2>💬 Speak to the Manager Agent</h2>
+                <p>Ask for recipes based on your current **{aggregatedItems.length}** inventory items.</p>
+                
+                <div className="chat-window" style={{ 
+                    border: '1px solid #ccc', 
+                    height: '200px', 
+                    overflowY: 'scroll', 
+                    padding: '10px', 
+                    borderRadius: '8px', 
+                    marginBottom: '10px',
+                    backgroundColor: '#f9f9f9'
+                }}>
+                    {chatHistory.length === 0 && <p style={{color: '#888'}}>Start the conversation: "What can I make with my ingredients?"</p>}
+                    {chatHistory.map((msg, index) => (
+                        <div key={index} style={{ 
+                            textAlign: msg.role === 'user' ? 'right' : 'left', 
+                            margin: '5px 0' 
+                        }}>
+                            <span style={{
+                                display: 'inline-block',
+                                padding: '8px 12px',
+                                borderRadius: '15px',
+                                backgroundColor: msg.role === 'user' ? '#d9eaff' : '#fff',
+                                border: '1px solid #eee'
+                            }}>
+                                <strong>{msg.role === 'user' ? 'You' : 'Agent'}:</strong> {msg.text}
+                            </span>
+                        </div>
+                    ))}
+                    {isChatting && <div style={{color: '#555', fontStyle: 'italic'}}>Agent is thinking...</div>}
+                </div>
+
+                <div className="chat-input-area" style={{ display: 'flex', gap: '5px' }}>
+                    <input
+                        type="text"
+                        placeholder="Type or speak your question..."
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyPress={(e) => {
+                            if (e.key === 'Enter') {
+                                chatWithAgent(chatInput);
+                            }
+                        }}
+                        disabled={isChatting}
+                        style={{ flexGrow: 1, padding: '10px', borderRadius: '5px', border: '1px solid #ccc' }}
+                    />
+                    
+                    {/* MIC BUTTON WITH VOICE INDICATOR LOGIC */}
+                    <button 
+                        onClick={startSpeechRecognition} 
+                        disabled={isChatting}
+                        className="mic-button"
+                        style={{ 
+                            padding: '10px', 
+                            fontSize: '1.2em', 
+                            cursor: 'pointer',
+                            backgroundColor: isListening ? 'red' : '#eee', 
+                            color: isListening ? 'white' : 'black',
+                            borderRadius: isListening ? '50%' : '5px', 
+                            transition: 'background-color 0.2s, border-radius 0.2s'
+                        }}
+                    >
+                        {isListening ? '🔴' : '🎙️'}
+                    </button>
+                    
+                    <button 
+                        onClick={() => chatWithAgent(chatInput)} 
+                        disabled={isChatting || !chatInput}
+                        className="send-button cta"
+                        style={{ padding: '10px 15px', cursor: 'pointer' }}
+                    >
+                        Send
+                    </button>
+                </div>
+            </section>
         </>
     );
 }
@@ -348,7 +478,7 @@ function InventoryPage({ inventory }) {
     );
 }
 
-function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, recipes }) {
+function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, recipes, preference }) {
     const ingredientOptions = Array.from(
         aggregatedItems.reduce((map, item) => {
             const key = item.item_name.trim().toLowerCase()
@@ -497,6 +627,12 @@ function App() {
   const [detectionError, setDetectionError] = useState(null)
   const [detections, setDetections] = useState([])
 
+  // 💬 MANAGER AGENT CHAT STATE 
+  const [chatInput, setChatInput] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
+  const [isChatting, setIsChatting] = useState(false);
+
+
   useEffect(() => {
     const fetchDetections = async () => {
       try {
@@ -600,7 +736,7 @@ function App() {
       })
 
       const generation = await model.generateContent([imagePart, { text: prompt }])
-      const jsonResponse = JSON.parse(generation.response.text())
+      const jsonResponse = JSON.parse(generation.response.text)
       const capturedDate = captureTimestamp || new Date().toISOString()
       const payload = {
         captured_date: capturedDate,
@@ -642,6 +778,57 @@ function App() {
     }
   };
 
+  // 💬 UPDATED MANAGER AGENT CHAT FUNCTION (Calls local ADK backend)
+  const chatWithAgent = async (message) => {
+    if (!message.trim()) return;
+
+    // 1. Update history immediately with the user's message
+    setChatHistory(prev => [...prev, { role: 'user', text: message }]);
+    setChatInput('');
+    setIsChatting(true);
+
+    try {
+        // 2. Format the message into the structure the ADK endpoint expects.
+        // ADK typically expects the full conversation history (contents)
+        const contents = chatHistory.map(msg => ({ 
+            role: msg.role === 'user' ? 'user' : 'model', 
+            text: msg.text 
+        }));
+        
+        // Add the current user message being sent
+        contents.push({ role: 'user', text: message });
+
+        // 3. Make the HTTP POST request to the local ADK Manager Agent
+        const response = await fetch(ADK_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: contents, // Pass the full conversation history
+            }),
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`ADK Server Error: ${response.status} - ${errorText.substring(0, 100)}...`);
+        }
+
+        // 4. Extract the text from the ADK's JSON response payload
+        const data = await response.json();
+        const agentResponseText = data.text || data.response || "Agent returned an empty response."; 
+
+        // 5. Update history with the agent's response
+        setChatHistory(prev => [...prev, { role: 'model', text: agentResponseText }]);
+
+    } catch (err) {
+        console.error("Agent Chat Error:", err);
+        setChatHistory(prev => [...prev, { role: 'model', text: `Connection Failed: ${err.message}` }]);
+    } finally {
+        setIsChatting(false);
+    }
+  };
+
 
   return (
     <BrowserRouter>
@@ -670,15 +857,22 @@ function App() {
                 handleFileUpload={handleFileUpload}
                 aggregatedItems={aggregatedItems}
                 
-                // PASS GEMINI PROPS:
+                // Vision Agent Props:
+                detectIngredients={detectIngredients}
                 detectedResults={detectedResults}
                 isDetecting={isDetecting}
                 detectionError={detectionError}
-                detectIngredients={detectIngredients}
                 
                 // Preference
                 preference={preference}
                 setPreference={setPreference}
+                
+                // NEW MANAGER AGENT CHAT PROPS:
+                chatWithAgent={chatWithAgent}
+                chatInput={chatInput}
+                setChatInput={setChatInput}
+                chatHistory={chatHistory}
+                isChatting={isChatting}
               />
             } 
           />

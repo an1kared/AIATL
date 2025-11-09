@@ -1,11 +1,10 @@
 import os
 from dotenv import load_dotenv
 from google.adk.agents import Agent
+#import google.auth
 from google.adk.tools import FunctionTool, AgentTool
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from pydantic_core.core_schema import decimal_schema
-from manager_agent.schemas import RecipeOutput, SousChefInput, InitialInput
+from vertexai.preview.reasoning_engines import AdkApp
+from manager_agent.schemas import RecipeOutput, SousChefInput, InitialInput # Assuming these imports are correct
 
 # Load environment variables (like GOOGLE_API_KEY)
 load_dotenv()
@@ -20,8 +19,7 @@ def sous_chef_guide(step_instruction: str, step_duration: int) -> str:
     """
     print(f"\n[Sous Chef Agent: LIVE GUIDE]")
     print(f"Instruction: {step_instruction} (Approx. {step_duration} mins)")
-    # In a real app, this would be an async function interacting with the user/API.
-    # For ADK testing, it just returns confirmation.
+    # For ADK testing, it returns confirmation.
     return "SUCCESS: User confirmed completion of this cooking step."
 
 # Convert the function into a tool the Manager can use
@@ -46,8 +44,9 @@ recipe_tool = AgentTool(recipe_creator_agent)
 
 
 # --- 3. Define the Manager Agent (The Orchestrator) ---
+# CRITICAL FIX: Defined at the top level for Uvicorn access!
 
-root_agent = Agent(
+manager_agent = Agent(
     name="MealManager",
     model="gemini-2.5-flash", # Use Flash for fast routing and reasoning
     instruction=(
@@ -60,31 +59,6 @@ root_agent = Agent(
     tools=[recipe_tool, sous_chef_tool] # The Manager's team
 )
 
-
-# --- 4. Running the System Locally (ADK Runner) ---
-
-if __name__ == '__main__':
-    print("--- Running the Culinary Manager Agent (Local Test) ---")
-    session_service = InMemorySessionService()
-    # 1. Instantiate the Runner with your Orchestrator Agent
-    #runner = Runner(agent=manager_agent)
-    runner = Runner(app_name="CulinaryManager",agent=manager_agent, session_service=session_service)
-    # 2. Define the test query
-    test_query = "I have chicken, bell peppers, soy sauce, and a tub of yogurt. I need a quick dinner recipe."
-
-    # 3. Run the workflow
-    response = runner.run(new_message=test_query, user_id="test_user", session_id="test_session")
-    
-    # 4. Print the final response text
-    print("\n--- Final Manager Agent Response ---") 
-    full_response_text = ""
-    for chunk in response:
-        # Loop over the streaming chunks 
-        # ADK chunks may be strings or objects with a 'text' attribute 
-        text_to_print = chunk.text if hasattr(chunk, 'text') else str(chunk) 
-        # Print in real-time (without a newline) 
-        print(text_to_print, end="")
-        # Accumulate the text for a final variable, if needed 
-        full_response_text += text_to_print 
-    print("\n----------------------------------") 
-
+app = AdkApp(
+    agent=manager_agent, 
+)

@@ -68,6 +68,11 @@ const recipes = [
     ingredients: ['🐟 Salmon', '🥬 Spinach', '🍅 Tomato', '🥛 Yogurt'],
     videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
     audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+    steps: [
+      'Season the salmon filet and sear it in a skillet until just cooked through',
+      'Build a quinoa base with fresh spinach and diced tomato',
+      'Plate the salmon over quinoa and spoon on a herbed yogurt drizzle',
+    ],
   },
   {
     id: 'green-goddess-omelette',
@@ -79,6 +84,11 @@ const recipes = [
     ingredients: ['🥚 Eggs', '🥬 Spinach', '🥑 Avocado'],
     videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
     audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+    steps: [
+      'Whisk eggs with herbs until light and airy',
+      'Sauté spinach in a pan before pouring in the egg mixture',
+      'Fold the omelette and top with sliced avocado and herb crema',
+    ],
   },
   {
     id: 'creamy-tomato-pasta',
@@ -90,6 +100,11 @@ const recipes = [
     ingredients: ['🍝 Pasta', '🍅 Tomato', '🥬 Spinach', '🥛 Yogurt'],
     videoUrl: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
     audioUrl: 'https://samplelib.com/lib/preview/mp3/sample-3s.mp3',
+    steps: [
+      'Boil pasta until al dente and set aside a cup of pasta water',
+      'Simmer tomatoes with aromatics, then stir in yogurt for a creamy sauce',
+      'Combine pasta, sauce, and spinach until the greens wilt and sauce coats the noodles',
+    ],
   },
 ]
 
@@ -407,7 +422,7 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
     );
 }
 
-function RecipeDetailPage({ recipes }) {
+function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus }) {
     // Uses the URL parameter to find the specific recipe
     const { recipeId } = useParams(); 
     const recipe = recipes.find(r => r.id === recipeId);
@@ -415,6 +430,11 @@ function RecipeDetailPage({ recipes }) {
     if (!recipe) {
         return <section className="recipe-detail"><h2>Recipe Not Found</h2></section>;
     }
+
+    const status = videoStatus?.[recipe.id]?.state || 'idle'
+    const statusMessage = videoStatus?.[recipe.id]?.message
+    const videos = videoEntries?.[recipe.id] || []
+    const hasSteps = Array.isArray(recipe.steps) && recipe.steps.length > 0
 
     return (
         <section className="recipe-detail">
@@ -435,6 +455,38 @@ function RecipeDetailPage({ recipes }) {
                     <li key={item}>{item}</li>
                 ))}
             </ul>
+            {hasSteps && (
+              <>
+                <h3>Steps</h3>
+                <ol>
+                  {recipe.steps.map((step, index) => (
+                    <li key={index}>{step}</li>
+                  ))}
+                </ol>
+              </>
+            )}
+            <button
+              type="button"
+              className="cta"
+              onClick={() => onGenerateVideos(recipe)}
+              disabled={status === 'loading' || !hasSteps}
+              style={{ marginTop: '1rem' }}
+            >
+              {status === 'loading' ? 'Generating AI Video…' : 'Generate AI Step Videos'}
+            </button>
+            {status === 'error' && statusMessage && (
+              <p className="status-error" style={{ marginTop: '0.75rem' }}>{statusMessage}</p>
+            )}
+            {videos.length > 0 && (
+              <div className="recipe-videos">
+                {videos.map((video, index) => (
+                  <div key={`${recipe.id}-video-${index}`} className="recipe-video">
+                    <p className="recipe-video__step">Step {index + 1}: {video.step}</p>
+                    <video controls src={video.url} />
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="media">
                 <div className="media__block">
                     <video controls src={recipe.videoUrl} />
@@ -465,6 +517,8 @@ function App() {
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionError, setDetectionError] = useState(null)
   const [detections, setDetections] = useState([])
+  const [recipeVideos, setRecipeVideos] = useState({})
+  const [recipeVideoStatus, setRecipeVideoStatus] = useState({})
 
   useEffect(() => {
     const fetchDetections = async () => {
@@ -491,6 +545,55 @@ function App() {
   }, [])
 
   const aggregatedItems = useMemo(() => aggregateDetections(detections), [detections])
+
+  const handleGenerateRecipeVideos = async (recipe) => {
+    const steps = Array.isArray(recipe?.steps) ? recipe.steps : []
+
+    if (steps.length === 0) {
+      setRecipeVideoStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'error', message: 'This recipe has no steps defined.' },
+      }))
+      return
+    }
+
+    setRecipeVideoStatus((prev) => ({
+      ...prev,
+      [recipe.id]: { state: 'loading' },
+    }))
+
+    try {
+      const response = await fetch(`/api/recipes/${recipe.id}/videos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps }),
+      })
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}))
+        throw new Error(errorBody.error || `Video generation failed with status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const videos = Array.isArray(data?.videos) ? data.videos : []
+
+      setRecipeVideos((prev) => ({
+        ...prev,
+        [recipe.id]: videos,
+      }))
+
+      setRecipeVideoStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'ready' },
+      }))
+    } catch (error) {
+      console.error('Failed to generate recipe videos', error)
+      setRecipeVideoStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'error', message: error.message || 'Failed to generate videos.' },
+      }))
+    }
+  }
 
   // Handler Functions
   const toggleIngredient = (id) => {
@@ -662,7 +765,12 @@ function App() {
           {/* Dynamic Recipe Detail Page (uses ID from URL) */}
           <Route 
             path="/recipes/:recipeId" 
-            element={<RecipeDetailPage recipes={recipes} />} 
+            element={<RecipeDetailPage 
+              recipes={recipes} 
+              onGenerateVideos={handleGenerateRecipeVideos} 
+              videoEntries={recipeVideos} 
+              videoStatus={recipeVideoStatus} 
+            />} 
           />
           {/* Inventory Page */}
           <Route 

@@ -645,8 +645,20 @@ function App() {
 
   useEffect(() => {
     const DETECTIONS_API_URL = import.meta.env.VITE_DETECTIONS_API_URL || ''
+    const loadFromLocal = () => {
+      try {
+        const cached = localStorage.getItem('DETECTIONS_CACHE')
+        if (cached) {
+          const arr = JSON.parse(cached)
+          if (Array.isArray(arr)) setDetections(arr)
+        }
+      } catch (e) {
+        console.warn('Failed to parse DETECTIONS_CACHE:', e)
+      }
+    }
     if (!DETECTIONS_API_URL) {
-      // No detections API configured in dev; skip fetch to avoid Vite proxy errors
+      // No API configured in dev; try local cache
+      loadFromLocal()
       return
     }
     const fetchDetections = async () => {
@@ -662,8 +674,10 @@ function App() {
             ? data
             : []
         setDetections(detectionsResponse)
+        try { localStorage.setItem('DETECTIONS_CACHE', JSON.stringify(detectionsResponse)) } catch {}
       } catch (error) {
         console.error('Unable to load detections from API:', error)
+        loadFromLocal()
       }
     }
     fetchDetections()
@@ -879,6 +893,13 @@ function App() {
         groceries: jsonResponse.groceries || [],
       }
       setDetectedResults(payload)
+      // Immediately reflect in UI inventory and cache locally
+      try {
+        setDetections((prev) => [payload, ...prev])
+        const cached = JSON.parse(localStorage.getItem('DETECTIONS_CACHE') || '[]')
+        const next = Array.isArray(cached) ? [payload, ...cached] : [payload]
+        localStorage.setItem('DETECTIONS_CACHE', JSON.stringify(next))
+      } catch {}
 
       try {
         const response = await fetch('/api/detections', {

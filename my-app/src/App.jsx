@@ -422,7 +422,7 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
     );
 }
 
-function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus }) {
+function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus, onGenerateRecipeImage, recipeImages, recipeImageStatus }) {
     // Uses the URL parameter to find the specific recipe
     const { recipeId } = useParams(); 
     const recipe = recipes.find(r => r.id === recipeId);
@@ -434,6 +434,9 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
     const status = videoStatus?.[recipe.id]?.state || 'idle'
     const statusMessage = videoStatus?.[recipe.id]?.message
     const videos = videoEntries?.[recipe.id] || []
+    const imageStatus = recipeImageStatus?.[recipe.id]?.state || 'idle'
+    const imageStatusMessage = recipeImageStatus?.[recipe.id]?.message
+    const recipeImage = recipeImages?.[recipe.id] || null
     const hasSteps = Array.isArray(recipe.steps) && recipe.steps.length > 0
 
     return (
@@ -465,17 +468,34 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
                 </ol>
               </>
             )}
-            <button
-              type="button"
-              className="cta"
-              onClick={() => onGenerateVideos(recipe)}
-              disabled={status === 'loading' || !hasSteps}
-              style={{ marginTop: '1rem' }}
-            >
-              {status === 'loading' ? 'Generating AI Video…' : 'Generate AI Step Videos'}
-            </button>
+            <div className="recipe-detail__actions">
+              <button
+                type="button"
+                className="cta"
+                onClick={() => onGenerateVideos(recipe)}
+                disabled={status === 'loading' || !hasSteps}
+              >
+                {status === 'loading' ? 'Generating AI Video…' : 'Generate AI Step Videos'}
+              </button>
+              <button
+                type="button"
+                className="outline"
+                onClick={() => onGenerateRecipeImage(recipe)}
+                disabled={imageStatus === 'loading'}
+              >
+                {imageStatus === 'loading' ? 'Creating Image…' : 'Generate Recipe Image'}
+              </button>
+            </div>
             {status === 'error' && statusMessage && (
               <p className="status-error" style={{ marginTop: '0.75rem' }}>{statusMessage}</p>
+            )}
+            {imageStatus === 'error' && imageStatusMessage && (
+              <p className="status-error" style={{ marginTop: '0.75rem' }}>{imageStatusMessage}</p>
+            )}
+            {recipeImage && (
+              <div className="recipe-detail__image">
+                <img src={recipeImage} alt={`${recipe.title} AI generated`} />
+              </div>
             )}
             {videos.length > 0 && (
               <div className="recipe-videos">
@@ -519,6 +539,8 @@ function App() {
   const [detections, setDetections] = useState([])
   const [recipeVideos, setRecipeVideos] = useState({})
   const [recipeVideoStatus, setRecipeVideoStatus] = useState({})
+  const [recipeImages, setRecipeImages] = useState({})
+  const [recipeImageStatus, setRecipeImageStatus] = useState({})
 
   useEffect(() => {
     const fetchDetections = async () => {
@@ -591,6 +613,57 @@ function App() {
       setRecipeVideoStatus((prev) => ({
         ...prev,
         [recipe.id]: { state: 'error', message: error.message || 'Failed to generate videos.' },
+      }))
+    }
+  }
+
+  const handleGenerateRecipeImage = async (recipe) => {
+    if (!recipe?.title) {
+      return
+    }
+
+    setRecipeImageStatus((prev) => ({
+      ...prev,
+      [recipe.id]: { state: 'loading' },
+    }))
+
+    try {
+      const response = await fetch(`/api/recipes/${recipe.id}/image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: recipe.title,
+          summary: recipe.summary,
+          steps: Array.isArray(recipe.steps) ? recipe.steps : [],
+        }),
+      })
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}))
+        throw new Error(errorBody.error || `Image generation failed with status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const image = data?.image || null
+
+      if (!image) {
+        throw new Error('Image generation did not return any image data.')
+      }
+
+      setRecipeImages((prev) => ({
+        ...prev,
+        [recipe.id]: image,
+      }))
+
+      setRecipeImageStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'ready' },
+      }))
+    } catch (error) {
+      console.error('Failed to generate recipe image', error)
+      setRecipeImageStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'error', message: error.message || 'Failed to generate image.' },
       }))
     }
   }
@@ -769,7 +842,10 @@ function App() {
               recipes={recipes} 
               onGenerateVideos={handleGenerateRecipeVideos} 
               videoEntries={recipeVideos} 
-              videoStatus={recipeVideoStatus} 
+              videoStatus={recipeVideoStatus}
+              onGenerateRecipeImage={handleGenerateRecipeImage}
+              recipeImages={recipeImages}
+              recipeImageStatus={recipeImageStatus}
             />} 
           />
           {/* Inventory Page */}

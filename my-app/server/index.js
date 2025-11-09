@@ -143,6 +143,105 @@ async function generateRecipeVideos(steps = []) {
   return videos;
 }
 
+async function generateRecipeImage({ title, summary, steps }) {
+  const projectId = process.env.GCP_PROJECT_ID;
+  const location = process.env.GCP_LOCATION || "us-central1";
+  if (!projectId) throw new Error("Missing GCP_PROJECT_ID");
+
+  const accessToken = await getAccessToken();
+  const stepList = Array.isArray(steps) && steps.length ? steps.join("\n- ") : "";
+  const prompt = [
+    "Create a single, appetizing food photography image suitable for a smart kitchen recipe app.",
+    `Recipe title: ${title || "Delicious Dish"}.`,
+    summary ? `Summary: ${summary}.` : "",
+    stepList ? `Key preparation notes:\n- ${stepList}` : "",
+    "Show the finished dish plated attractively with good lighting, shallow depth of field, and clean background.",
+    "Avoid captions, text overlays, people, or multiple variations—only one final plated dish.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const modelId = process.env.IMAGEN_MODEL_ID || "imagen-4.0-generate-001";
+  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:predict`;
+
+  let response;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        instances: [
+          {
+            prompt,
+          },
+        ],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: "1:1",
+          negativePrompt: "low quality, distorted, blurry, text, watermark",
+          enhancePrompt: false,
+          personGeneration: "allow_all",
+          safetySetting: "block_few",
+          addWatermark: true,
+          includeRaiReason: true,
+          language: "auto",
+        },
+      }),
+    });
+
+    if ([403, 429, 503].includes(response.status)) {
+      console.warn("⚠️ Imagen quota/availability issue, retrying in 30s...");
+      await new Promise((r) => setTimeout(r, 30000));
+      continue;
+    }
+    break;
+  }
+
+  if (!response?.ok) {
+    const body = await response?.text?.().catch(() => "");
+    throw new Error(`Imagen request failed: ${response?.status} ${body}`);
+  }
+
+  const data = await response.json();
+  const predictions = Array.isArray(data?.predictions) ? data.predictions : [];
+  if (!predictions.length) {
+    throw new Error("Imagen returned no predictions");
+  }
+
+  for (const prediction of predictions) {
+    const imageEntries = Array.isArray(prediction?.images) ? prediction.images : [];
+    for (const entry of imageEntries) {
+      if (entry?.bytesBase64Encoded) {
+        return `data:image/png;base64,${entry.bytesBase64Encoded}`;
+      }
+      if (entry?.uri) {
+        return entry.uri;
+      }
+    }
+
+    const mediaOutputs = prediction?.mediaOutputs || [];
+    for (const entry of mediaOutputs) {
+      if (entry?.format === "IMAGE") {
+        if (entry?.bytesBase64Encoded) {
+          return `data:image/png;base64,${entry.bytesBase64Encoded}`;
+        }
+        if (entry?.uri) {
+          return entry.uri;
+        }
+      }
+    }
+
+    if (prediction?.bytesBase64Encoded) {
+      return `data:image/png;base64,${prediction.bytesBase64Encoded}`;
+    }
+  }
+
+  throw new Error("No usable image payload returned by Imagen");
+}
+
 // === ROUTES ===
 app.get("/api/detections", async (req, res) => {
   try {
@@ -201,6 +300,26 @@ app.post("/api/recipes/:id/videos", async (req, res) => {
   } catch (e) {
     console.error("Failed to generate recipe videos", e);
     res.status(500).json({ error: e.message || "Failed to generate videos" });
+  }
+});
+
+app.post("/api/recipes/:id/image", async (req, res) => {
+  try {
+    const { title, summary, steps } = req.body || {};
+    if (!title) {
+      return res.status(400).json({ error: "Recipe title is required" });
+    }
+
+    const imageDataUrl = await generateRecipeImage({
+      title,
+      summary,
+      steps: Array.isArray(steps) ? steps : [],
+    });
+
+    res.status(201).json({ image: imageDataUrl });
+  } catch (e) {
+    console.error("Failed to generate recipe image", e);
+    res.status(500).json({ error: e.message || "Failed to generate recipe image" });
   }
 });
 

@@ -259,6 +259,25 @@ button.outline {
   margin: 0;
 }
 
+.recipe-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.recipe-detail__image {
+  margin-top: 1.5rem;
+}
+
+.recipe-detail__image img {
+  width: 100%;
+  max-width: 480px;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px -28px rgba(15, 23, 42, 0.45);
+  display: block;
+}
+
 .status-error {
   margin: 0;
   color: #dc2626;

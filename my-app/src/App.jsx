@@ -436,7 +436,7 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
     const videos = videoEntries?.[recipe.id] || []
     const imageStatus = recipeImageStatus?.[recipe.id]?.state || 'idle'
     const imageStatusMessage = recipeImageStatus?.[recipe.id]?.message
-    const recipeImage = recipeImages?.[recipe.id] || null
+    const recipeImageEntries = recipeImages?.[recipe.id] || []
     const hasSteps = Array.isArray(recipe.steps) && recipe.steps.length > 0
 
     return (
@@ -481,7 +481,7 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
                 type="button"
                 className="outline"
                 onClick={() => onGenerateRecipeImage(recipe)}
-                disabled={imageStatus === 'loading'}
+                disabled={imageStatus === 'loading' || !hasSteps}
               >
                 {imageStatus === 'loading' ? 'Creating Image…' : 'Generate Recipe Image'}
               </button>
@@ -492,9 +492,14 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
             {imageStatus === 'error' && imageStatusMessage && (
               <p className="status-error" style={{ marginTop: '0.75rem' }}>{imageStatusMessage}</p>
             )}
-            {recipeImage && (
-              <div className="recipe-detail__image">
-                <img src={recipeImage} alt={`${recipe.title} AI generated`} />
+            {recipeImageEntries.length > 0 && (
+              <div className="recipe-detail__images">
+                {recipeImageEntries.map((entry, idx) => (
+                  <div key={`${recipe.id}-image-${idx}`} className="recipe-detail__image-card">
+                    <p className="recipe-detail__image-step">Step {idx + 1}</p>
+                    <img src={entry.url} alt={`Step ${idx + 1} illustration`} />
+                  </div>
+                ))}
               </div>
             )}
             {videos.length > 0 && (
@@ -618,7 +623,13 @@ function App() {
   }
 
   const handleGenerateRecipeImage = async (recipe) => {
-    if (!recipe?.title) {
+    const steps = Array.isArray(recipe?.steps) ? recipe.steps : []
+
+    if (!recipe?.title || steps.length === 0) {
+      setRecipeImageStatus((prev) => ({
+        ...prev,
+        [recipe.id]: { state: 'error', message: 'This recipe needs a title and steps before generating images.' },
+      }))
       return
     }
 
@@ -635,6 +646,7 @@ function App() {
           title: recipe.title,
           summary: recipe.summary,
           ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+          steps,
         }),
       })
 
@@ -644,15 +656,15 @@ function App() {
       }
 
       const data = await response.json()
-      const image = data?.image || null
+      const images = Array.isArray(data?.images) ? data.images : []
 
-      if (!image) {
+      if (images.length === 0) {
         throw new Error('Image generation did not return any image data.')
       }
 
       setRecipeImages((prev) => ({
         ...prev,
-        [recipe.id]: image,
+        [recipe.id]: images,
       }))
 
       setRecipeImageStatus((prev) => ({

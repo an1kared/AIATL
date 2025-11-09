@@ -634,7 +634,7 @@ function App() {
         body: JSON.stringify({
           title: recipe.title,
           summary: recipe.summary,
-          steps: Array.isArray(recipe.steps) ? recipe.steps : [],
+          ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
         }),
       })
 

@@ -143,20 +143,29 @@ async function generateRecipeVideos(steps = []) {
   return videos;
 }
 
-async function generateRecipeImage({ title, summary, steps }) {
+async function generateRecipeImage({ title, summary, ingredients }) {
   const projectId = process.env.GCP_PROJECT_ID;
   const location = process.env.GCP_LOCATION || "us-central1";
   if (!projectId) throw new Error("Missing GCP_PROJECT_ID");
 
   const accessToken = await getAccessToken();
-  const stepList = Array.isArray(steps) && steps.length ? steps.join("\n- ") : "";
+  const normalizedIngredients = Array.isArray(ingredients)
+    ? ingredients
+        .map((entry) =>
+          String(entry || "")
+            .replace(/^[^\w]+/, "")
+            .trim(),
+        )
+        .filter(Boolean)
+    : [];
+
   const prompt = [
-    "Create a single, appetizing food photography image suitable for a smart kitchen recipe app.",
+    "Create a single appetizing hero food photograph suitable for a smart kitchen recipe app.",
     `Recipe title: ${title || "Delicious Dish"}.`,
-    summary ? `Summary: ${summary}.` : "",
-    stepList ? `Key preparation notes:\n- ${stepList}` : "",
-    "Show the finished dish plated attractively with good lighting, shallow depth of field, and clean background.",
-    "Avoid captions, text overlays, people, or multiple variations—only one final plated dish.",
+    normalizedIngredients.length ? `Key ingredients to feature: ${normalizedIngredients.join(", ")}.` : "",
+    summary ? `Flavor inspiration: ${summary}.` : "",
+    "Portray only the finished plated dish ready to serve — no cooking process, utensils in motion, or prep scenes.",
+    "Use bright, natural lighting, shallow depth of field, clean background, and no text overlays or watermarks.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -305,7 +314,7 @@ app.post("/api/recipes/:id/videos", async (req, res) => {
 
 app.post("/api/recipes/:id/image", async (req, res) => {
   try {
-    const { title, summary, steps } = req.body || {};
+    const { title, summary, ingredients } = req.body || {};
     if (!title) {
       return res.status(400).json({ error: "Recipe title is required" });
     }
@@ -313,7 +322,7 @@ app.post("/api/recipes/:id/image", async (req, res) => {
     const imageDataUrl = await generateRecipeImage({
       title,
       summary,
-      steps: Array.isArray(steps) ? steps : [],
+      ingredients: Array.isArray(ingredients) ? ingredients : [],
     });
 
     res.status(201).json({ image: imageDataUrl });

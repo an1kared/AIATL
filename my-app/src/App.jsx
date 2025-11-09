@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom'
 import './App.css';
 import { CameraCapture } from './CameraCapture'; // Assuming CameraCapture is available
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { speakWithElevenLabs } from './tts/elevenlabs.js';
 
 // --- Gemini AI Setup ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -14,6 +15,27 @@ if (!apiKey) {
 }
 
 const ai = new GoogleGenerativeAI(apiKey);
+
+// ADK API server (run `adk api_server chef_agent`) and set in .env.local
+// VITE_ADK_API_URL=http://127.0.0.1:8000
+const ADK_TOOL_URL = 'http://127.0.0.1:8000/tool';
+
+async function callAdkTool(toolName, args) {
+  const payload = { name: toolName, arguments: args || {} };
+  try {
+    console.debug('ADK POST', ADK_TOOL_URL);
+  } catch {}
+  const res = await fetch(ADK_TOOL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} at ${path}: ${text.slice(0, 200)}`);
+  }
+  return await res.json();
+}
 
 // Define the desired structured output schema for item name and count
 const ingredientSchema = {
@@ -153,11 +175,43 @@ function aggregateDetections(detections = []) {
 
 // --- PAGE COMPONENTS ---
 
-function CapturePage({ 
-    handleImageCapture, handleCloseImport, capturedImageBase64, 
-    importMode, setImportMode, fileInputRef, handleFileUpload, aggregatedItems,
-    // PASSED GEMINI PROPS:
-    detectIngredients, detectedResults, isDetecting, detectionError 
+function CapturePage({
+  handleImageCapture,
+  handleCloseImport,
+  capturedImageBase64,
+  importMode,
+  setImportMode,
+  fileInputRef,
+  handleFileUpload,
+  aggregatedItems,
+  // PASSED GEMINI PROPS:
+  detectIngredients,
+  detectedResults,
+  isDetecting,
+  detectionError,
+  // PREFERENCE PROPS:
+  preference,
+  setPreference,
+  // VOICE ASSISTANT PROPS:
+  voiceText,
+  setVoiceText,
+  isSpeaking,
+  onSpeak,
+  // Recording
+  isRecording,
+  isPaused,
+  userAudioUrl,
+  startRecording,
+  pauseRecording,
+  resumeRecording,
+  stopRecording,
+  // Agent calls
+  askAgent,
+  adkBusy,
+  adkSummary,
+  finalizeId,
+  setFinalizeId,
+  finalizeRecipe,
 }) {
   const buildStorageBuckets = (items = []) => {
     return items.reduce(
@@ -192,118 +246,251 @@ function CapturePage({
 
   const inventoryBuckets = buildStorageBuckets(aggregatedItems)
 
+  const startSpeechRecognition = () => {
+    try {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+      if (!SR) {
+        alert('Voice input not supported in this browser. Try Chrome over HTTPS.')
+        return
+      }
+      const recognition = new SR()
+      recognition.interimResults = false
+      recognition.lang = 'en-US'
+      recognition.onresult = (e) => {
+        const transcript = e.results[0][0].transcript || ''
+        setVoiceText(transcript)
+      }
+      recognition.start()
+    } catch (e) {
+      console.error('Speech recognition error:', e)
+    }
+  }
+
   return (
     <>
-            <header className="hero">
-                <div className="hero__badge">Smart Kitchen Agents</div>
-                <h1>Your Personal Fridge Companion</h1>
-                <p>
-                    Snap your groceries, classify storage, track inventory, and generate nutrition-forward
-                    recipes in seconds.
-                </p>
-                <div className="hero__agents">
-                    <span>📸 Vision Agent</span>
-                    <span>🧊 Fridge Agent</span>
-                    <span>🥗 Recipe Agent</span>
-                    <span>📊 Nutrition Agent</span>
-                    <span>🛒 Grocery Agent</span>
-      </div>
-            </header>
-            <section className="capture">
-                <h2>Import Groceries</h2>
-                {importMode === 'camera' && (
-                    <CameraCapture onCapture={handleImageCapture} onClose={handleCloseImport} />
-                )}
-                <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
-                <div className="capture__actions">
-                    <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} />
-                    <button type="button" onClick={() => setImportMode('camera')}>📸 Take Photo</button>
-                    <button type="button" onClick={() => fileInputRef.current.click()}>📂 Upload Photo</button>
-                    <button type="button" onClick={() => setImportMode('manual')} className="outline">📝 Manual Entry</button>
-                    
-                    {/* Analyze Button (Now uses prop) */}
-                    <button
-                      type="button"
-                      className="cta"
-                      onClick={detectIngredients}
-                      disabled={isDetecting || !capturedImageBase64}
-                      style={{ marginLeft: '10px' }}
-                    >
-                      {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
-        </button>
+      <header className="hero">
+        <div className="hero__badge">Smart Kitchen Agents</div>
+        <h1>Your Personal Fridge Companion</h1>
+        <p>
+          Snap your groceries, classify storage, track inventory, and generate nutrition-forward
+          recipes in seconds.
+        </p>
+        <div className="hero__agents">
+          <span>📸 Vision Agent</span>
+          <span>🧊 Fridge Agent</span>
+          <span>🥗 Recipe Agent</span>
+          <span>📊 Nutrition Agent</span>
+          <span>🛒 Grocery Agent</span>
+        </div>
+      </header>
+      {/* Preference Input */}
+      <section className="preference" style={{ padding: '1rem 0' }}>
+        <h2 style={{ marginBottom: 8 }}>What do you feel like making?</h2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={preference}
+            onChange={(e) => setPreference(e.target.value)}
+            placeholder="e.g., high-protein pasta, vegan tacos, quick breakfast"
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid #ddd',
+              minWidth: 260,
+              flex: '1 1 260px',
+            }}
+          />
+          <Link to="/recipes" className="cta" style={{ textDecoration: 'none' }}>
+            Find Recipes
+          </Link>
+        </div>
+      </section>
+      {/* Voice Assistant */}
+      <section className="chat-section" style={{ marginTop: 20 }}>
+        <h2>What do you want to cook up today?</h2>
+        <p>Speak or type your request; the assistant will reply in voice.</p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={voiceText}
+            onChange={(e) => setVoiceText(e.target.value)}
+            placeholder="e.g., Read me a quick salmon bowl recipe"
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid #ddd',
+              minWidth: 260,
+              flex: '1 1 260px',
+            }}
+          />
+          <button type="button" className="outline" onClick={startSpeechRecognition}>
+            🎤 Speak
+          </button>
+          <button type="button" className="outline" onClick={startRecording} disabled={isRecording}>
+            ● Record
+          </button>
+          <button type="button" className="outline" onClick={pauseRecording} disabled={!isRecording || isPaused}>
+            ❚❚ Pause
+          </button>
+          <button type="button" className="outline" onClick={resumeRecording} disabled={!isPaused}>
+            ▶ Resume
+          </button>
+          <button type="button" className="outline" onClick={stopRecording} disabled={!isRecording && !isPaused}>
+            ■ Stop
+          </button>
+          {userAudioUrl && <audio controls src={userAudioUrl} />}
+          <button type="button" className="cta" onClick={onSpeak} disabled={!voiceText || isSpeaking}>
+            🔊 Play Voice
+          </button>
+          <button type="button" className="cta" onClick={askAgent} disabled={adkBusy}>
+            🤖 Ask Agent
+          </button>
+          {isSpeaking && <span style={{ color: '#555' }}>Playing audio… 🎧</span>}
+          {adkBusy && <span style={{ color: '#555' }}>Agent is thinking…</span>}
+        </div>
+        {adkSummary?.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <h3>Top options</h3>
+            <ul>
+              {adkSummary.map((r) => (
+                <li key={r.id}>
+                  <strong>{r.title}</strong> — score {r.score} / minutes {r.minutes} (id: {r.id})
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={finalizeId}
+                onChange={(e) => setFinalizeId(e.target.value)}
+                placeholder="Enter recipe id to finalize"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid #ddd',
+                  minWidth: 220,
+                }}
+              />
+              <button type="button" className="outline" onClick={finalizeRecipe} disabled={!finalizeId || adkBusy}>
+                ✅ Finalize & Save
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+      <section className="capture">
+        <h2>Import Groceries</h2>
+        {importMode === 'camera' && (
+          <CameraCapture onCapture={handleImageCapture} onClose={handleCloseImport} />
+        )}
+        <p>Upload or snap a photo for the agents to auto-detect items and routing.</p>
+        <div className="capture__actions">
+          <input
+            type="file"
+            accept="image/*"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            style={{ display: 'none' }}
+          />
+          <button type="button" onClick={() => setImportMode('camera')}>
+            📸 Take Photo
+          </button>
+          <button type="button" onClick={() => fileInputRef.current.click()}>
+            📂 Upload Photo
+          </button>
+          <button type="button" onClick={() => setImportMode('manual')} className="outline">
+            📝 Manual Entry
+          </button>
 
-                </div>
-                {importMode === 'manual' && (
-                    <p className="status-message">Manual entry form goes here...</p>
-                )}
-                {capturedImageBase64 && (
-                    <div className="capture__image-preview">
-                        <h3>Image Agent Preview</h3>
-                        <img src={capturedImageBase64} alt="Captured Grocery Item" style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}/>
-                    </div>
-                )}
-                <div className="capture__preview">
-                    <h3>Vision Agent Results</h3>
-                    {/* Display Status/Error */}
-                    {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
-                    {isDetecting && <p style={{ marginTop: '10px' }}>Analyzing image, please wait...</p>}
+          {/* Analyze Button (Now uses prop) */}
+          <button
+            type="button"
+            className="cta"
+            onClick={detectIngredients}
+            disabled={isDetecting || !capturedImageBase64}
+            style={{ marginLeft: '10px' }}
+          >
+            {isDetecting ? '🤖 Detecting...' : '✨ Analyze with Vision Agent'}
+          </button>
+        </div>
+        {importMode === 'manual' && (
+          <p className="status-message">Manual entry form goes here...</p>
+        )}
+        {capturedImageBase64 && (
+          <div className="capture__image-preview">
+            <h3>Image Agent Preview</h3>
+            <img
+              src={capturedImageBase64}
+              alt="Captured Grocery Item"
+              style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
+            />
+          </div>
+        )}
+        <div className="capture__preview">
+          <h3>Vision Agent Results</h3>
+          {/* Display Status/Error */}
+          {detectionError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {detectionError}</p>}
+          {isDetecting && <p style={{ marginTop: '10px' }}>Analyzing image, please wait...</p>}
 
-                    {capturedImageBase64 && !isDetecting && !detectedResults && !detectionError && (
-                      <p style={{ marginTop: '10px' }}>Image loaded. Click 'Analyze with Vision Agent' to start analysis.</p>
-                    )}
+          {capturedImageBase64 && !isDetecting && !detectedResults && !detectionError && (
+            <p style={{ marginTop: '10px' }}>
+              Image loaded. Click 'Analyze with Vision Agent' to start analysis.
+            </p>
+          )}
 
-                    {detectedResults ? (
-                        <>
-                            <p>
-                              ✅ <strong>{detectedResults.groceries.length}</strong> items successfully categorized:
-                            </p>
-                            <ul>
-                                {detectedResults.groceries.map((item, index) => {
-                                    const emoji = item?.emoji && item.emoji.trim() ? item.emoji.trim() : '🛒'
-                                    return (
-                                        <li key={index}>
-                                            <span>{emoji} {item.item_name}</span>
-                                            <span className="chip">{item.item_count} units</span>
-                                            <span
-                                              className={`chip ${
-                                                item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
-                                              }`}
-                                            >
-                                              {item.storage_location}
-                                            </span>
-                                        </li>
-                                    )
-                                })}
-                            </ul>
-                        </>
-                    ) : (
-                        <p>A list of detected items will be generated here upon analysis.</p>
-                    )}
-
-                </div>
-                <div className="storage-display">
-                  <div className="storage-card storage-card--fridge">
-                    <div className="storage-card__header">
-                      <span className="storage-card__icon">🧊</span>
-                      <strong>Fridge</strong>
-                    </div>
-                    <div className="storage-card__body">
-                      {renderStorageList(inventoryBuckets.fridge, 'Nothing chilling right now.')}
-                    </div>
-                  </div>
-                  <div className="storage-card storage-card--pantry">
-                    <div className="storage-card__header">
-                      <span className="storage-card__icon">🗄️</span>
-                      <strong>Pantry</strong>
-                    </div>
-                    <div className="storage-card__body">
-                      {renderStorageList(inventoryBuckets.pantry, 'Shelves are empty for now.')}
-                    </div>
-                  </div>
-                </div>
-            </section>
-        </>
-    );
+          {detectedResults ? (
+            <>
+              <p>
+                ✅ <strong>{detectedResults.groceries.length}</strong> items successfully categorized:
+              </p>
+              <ul>
+                {detectedResults.groceries.map((item, index) => {
+                  const emoji = item?.emoji && item.emoji.trim() ? item.emoji.trim() : '🛒'
+                  return (
+                    <li key={index}>
+                      <span>
+                        {emoji} {item.item_name}
+                      </span>
+                      <span className="chip">{item.item_count} units</span>
+                      <span
+                        className={`chip ${
+                          item.storage_location === 'Fridge' ? 'fridge' : 'pantry'
+                        }`}
+                      >
+                        {item.storage_location}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : (
+            <p>A list of detected items will be generated here upon analysis.</p>
+          )}
+        </div>
+        <div className="storage-display">
+          <div className="storage-card storage-card--fridge">
+            <div className="storage-card__header">
+              <span className="storage-card__icon">🧊</span>
+              <strong>Fridge</strong>
+            </div>
+            <div className="storage-card__body">
+              {renderStorageList(inventoryBuckets.fridge, 'Nothing chilling right now.')}
+            </div>
+          </div>
+          <div className="storage-card storage-card--pantry">
+            <div className="storage-card__header">
+              <span className="storage-card__icon">🗄️</span>
+              <strong>Pantry</strong>
+            </div>
+            <div className="storage-card__body">
+              {renderStorageList(inventoryBuckets.pantry, 'Shelves are empty for now.')}
+            </div>
+          </div>
+        </div>
+      </section>
+    </>
+  )
 }
 
 function InventoryPage({ inventory }) {
@@ -508,6 +695,7 @@ function RecipeDetailPage({ recipes, onGenerateRecipeImage, recipeImages, recipe
 function App() {
   // Shared State and Refs
   const [selectedIngredients, setSelectedIngredients] = useState([])
+  const [preference, setPreference] = useState('')
   const [importMode, setImportMode] = useState(null)
   const [capturedImageBase64, setCapturedImageBase64] = useState(null)
   const [captureTimestamp, setCaptureTimestamp] = useState(null)
@@ -520,6 +708,18 @@ function App() {
   const [detections, setDetections] = useState([])
   const [recipeImages, setRecipeImages] = useState({})
   const [recipeImageStatus, setRecipeImageStatus] = useState({})
+
+  // Voice agent & ADK state
+  const [voiceText, setVoiceText] = useState('')
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [userAudioUrl, setUserAudioUrl] = useState('')
+  const mediaRecorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const [adkBusy, setAdkBusy] = useState(false)
+  const [adkSummary, setAdkSummary] = useState([])
+  const [finalizeId, setFinalizeId] = useState('')
 
   useEffect(() => {
     const fetchDetections = async () => {
@@ -602,6 +802,130 @@ function App() {
         ...prev,
         [recipe.id]: { state: 'error', message: error.message || 'Failed to generate image.' },
       }))
+    }
+  }
+
+  const handleSpeak = async () => {
+    const defaultAgentReply =
+      "hey! i'm your personal sous chef and here's what I sound like. pleasure to meet you!"
+    try {
+      setIsSpeaking(true)
+      await speakWithElevenLabs(defaultAgentReply)
+    } catch (e) {
+      console.error('TTS error:', e)
+    } finally {
+      setIsSpeaking(false)
+    }
+  }
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream)
+      mediaRecorderRef.current = mr
+      chunksRef.current = []
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data)
+      }
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        const url = URL.createObjectURL(blob)
+        setUserAudioUrl(url)
+        chunksRef.current = []
+      }
+      mr.start()
+      setIsRecording(true)
+      setIsPaused(false)
+    } catch (e) {
+      console.error('Recording error:', e)
+    }
+  }
+
+  const pauseRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state === 'recording') {
+      mr.pause()
+      setIsPaused(true)
+    }
+  }
+
+  const resumeRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state === 'paused') {
+      mr.resume()
+      setIsPaused(false)
+    }
+  }
+
+  const stopRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (mr && (mr.state === 'recording' || mr.state === 'paused')) {
+      mr.stop()
+      setIsRecording(false)
+      setIsPaused(false)
+    }
+  }
+
+  const askAgent = async () => {
+    if (!voiceText.trim()) return
+    try {
+      setAdkBusy(true)
+      try {
+        await callAdkTool('set_preferences', { preferences: { preference: voiceText.trim() } })
+      } catch (e) {
+        console.warn('set_preferences failed:', e)
+      }
+      const plan = await callAdkTool('plan_recipes', {
+        preference: voiceText.trim(),
+        time_limit_minutes: 0,
+        max_recipes: 5,
+        finalize: false,
+      })
+      const summary = plan?.summary || []
+      setAdkSummary(summary)
+      if (summary.length > 0) {
+        const top = summary.slice(0, 2).map((s) => s.title).join(' and ')
+        try {
+          setIsSpeaking(true)
+          await speakWithElevenLabs(`Here are some options: ${top}. Tell me an ID to finalize.`)
+        } catch (e) {
+          console.error('TTS error:', e)
+        } finally {
+          setIsSpeaking(false)
+        }
+      }
+    } catch (e) {
+      console.error('Agent call failed:', e)
+      alert(e.message)
+    } finally {
+      setAdkBusy(false)
+    }
+  }
+
+  const finalizeRecipe = async () => {
+    if (!finalizeId.trim()) return
+    try {
+      setAdkBusy(true)
+      const fin = await callAdkTool('plan_recipes', {
+        preference: voiceText.trim(),
+        finalize: true,
+        choice_id: finalizeId.trim(),
+      })
+      const path = fin?.save?.path || fin?.save?.gcs_uri || '(path unavailable)'
+      try {
+        setIsSpeaking(true)
+        await speakWithElevenLabs('Recipe saved. Enjoy your meal!')
+      } catch (e) {
+        console.error('TTS error:', e)
+      } finally {
+        setIsSpeaking(false)
+      }
+      alert(`Saved recipe: ${path}`)
+    } catch (e) {
+      console.error('Finalize failed:', e)
+      alert(e.message)
+    } finally {
+      setAdkBusy(false)
     }
   }
 
@@ -757,6 +1081,31 @@ function App() {
                 isDetecting={isDetecting}
                 detectionError={detectionError}
                 detectIngredients={detectIngredients}
+                
+                // Preference
+                preference={preference}
+                setPreference={setPreference}
+                
+                // Voice Assistant
+                voiceText={voiceText}
+                setVoiceText={setVoiceText}
+                isSpeaking={isSpeaking}
+                onSpeak={handleSpeak}
+                // Recording
+                isRecording={isRecording}
+                isPaused={isPaused}
+                userAudioUrl={userAudioUrl}
+                startRecording={startRecording}
+                pauseRecording={pauseRecording}
+                resumeRecording={resumeRecording}
+                stopRecording={stopRecording}
+                // Agent calls
+                askAgent={askAgent}
+                adkBusy={adkBusy}
+                adkSummary={adkSummary}
+                finalizeId={finalizeId}
+                setFinalizeId={setFinalizeId}
+                finalizeRecipe={finalizeRecipe}
               />
             } 
           />
@@ -769,6 +1118,7 @@ function App() {
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
                 recipes={recipes}
+                preference={preference}
               />
             } 
           />

@@ -27,6 +27,7 @@ export async function speakWithElevenLabs(text, options = {}) {
 
   const voiceId = options.voiceId || DEFAULT_VOICE_ID
   const modelId = options.modelId || 'eleven_multilingual_v2'
+  const autoplay = options.autoplay !== false // default true
   const stability = typeof options.stability === 'number' ? options.stability : 0.4
   const similarityBoost =
     typeof options.similarityBoost === 'number' ? options.similarityBoost : 0.8
@@ -64,28 +65,28 @@ export async function speakWithElevenLabs(text, options = {}) {
 
   const blob = await res.blob()
   const audioUrl = URL.createObjectURL(blob)
-  // Create a transient audio element to increase playback reliability across browsers
-  const audio = document.createElement('audio')
-  audio.src = audioUrl
-  audio.preload = 'auto'
-  audio.autoplay = false
-  audio.style.display = 'none'
-  document.body.appendChild(audio)
-  try {
-    await audio.play()
-  } catch (err) {
-    console.error('Audio play failed:', err)
-    // As a fallback, try requiring a subsequent user interaction to call play()
+  if (autoplay) {
+    // Create a transient audio element to increase playback reliability across browsers
+    const audio = document.createElement('audio')
+    audio.src = audioUrl
+    audio.preload = 'auto'
+    audio.autoplay = false
+    audio.style.display = 'none'
+    document.body.appendChild(audio)
+    try {
+      await audio.play()
+    } catch (err) {
+      console.error('Audio play failed:', err)
+    }
+    audio.addEventListener(
+      'ended',
+      () => {
+        URL.revokeObjectURL(audioUrl)
+        audio.remove()
+      },
+      { once: true },
+    )
   }
-
-  // Revoke the URL after playback finishes to free memory
-  audio.addEventListener(
-    'ended',
-    () => {
-      URL.revokeObjectURL(audioUrl)
-      audio.remove()
-    },
-    { once: true },
-  )
+  return audioUrl
 }
 

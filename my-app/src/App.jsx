@@ -209,9 +209,6 @@ function CapturePage({
   askAgent,
   adkBusy,
   adkSummary,
-  finalizeId,
-  setFinalizeId,
-  finalizeRecipe,
 }) {
   const buildStorageBuckets = (items = []) => {
     return items.reduce(
@@ -230,16 +227,19 @@ function CapturePage({
 
   const renderStorageList = (items = [], emptyLabel) =>
     items.length > 0 ? (
-      <ul className="storage-card__list">
-        {items.map((item, index) => (
-          <li key={`${item.item_name}-${index}`} className="storage-card__item">
-            <span className="storage-card__item-name">
-              {(item?.emoji && item.emoji.trim()) || '🛒'} {item.item_name}
-            </span>
-            <span className="chip">{item.item_count} units</span>
-          </li>
-        ))}
-      </ul>
+      <div className="storage-shelf">
+        {items.map((item, index) => {
+          const emoji = (item?.emoji && item.emoji.trim()) || '🛒'
+          const count = Number(item?.item_count) || 0
+          return (
+            <div key={`${item.item_name}-${index}`} className="food-tile" title={`${item.item_name} (${count})`}>
+              <div className="food-emoji">{emoji}</div>
+              <div className="food-label">{item.item_name}</div>
+              <div className="food-count">{count}x</div>
+            </div>
+          )
+        })}
+      </div>
     ) : (
       <p className="storage-card__empty">{emptyLabel}</p>
     )
@@ -358,23 +358,7 @@ function CapturePage({
                 </li>
               ))}
             </ul>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                value={finalizeId}
-                onChange={(e) => setFinalizeId(e.target.value)}
-                placeholder="Enter recipe id to finalize"
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 6,
-                  border: '1px solid #ddd',
-                  minWidth: 220,
-                }}
-              />
-              <button type="button" className="outline" onClick={finalizeRecipe} disabled={!finalizeId || adkBusy}>
-                ✅ Finalize & Save
-              </button>
-            </div>
+            <p style={{ marginTop: 6 }}>Open the Recipes tab to pick one to finalize.</p>
           </div>
         )}
       </section>
@@ -542,35 +526,6 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
 
     return (
         <>
-            <section className="selector">
-                <div className="selector__head">
-                    <h2>What&apos;s on the menu?</h2>
-                    <p>Select ingredients detected in your fridge or pantry to personalize recipe ideas.</p>
-                </div>
-                <div className="chips">
-                    {ingredientOptions.length === 0 ? (
-                        <p style={{ margin: 0 }}>Run a detection to load ingredient chips.</p>
-                    ) : (
-                        ingredientOptions.map((ingredient) => {
-                            const active = selectedIngredients.includes(ingredient.id)
-                            return (
-                                <button
-                                    type="button"
-                                    key={ingredient.id}
-                                    className={`chip-button ${active ? 'active' : ''}`}
-                                    onClick={() => toggleIngredient(ingredient.id)}
-                                >
-                                    {ingredient.label}
-                                </button>
-                            )
-                        })
-                    )}
-                </div>
-                <button type="button" className="cta" disabled={ingredientOptions.length === 0}>
-                    Let&apos;s Cook
-                </button>
-            </section>
-
             <section className="recipes">
                 <div className="recipes__head">
                     <h2>Recipe Matches</h2>
@@ -609,7 +564,7 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
     );
 }
 
-function RecipeDetailPage({ recipes, onGenerateRecipeImage, recipeImages, recipeImageStatus }) {
+function RecipeDetailPage({ recipes, onGenerateRecipeImage, recipeImages, recipeImageStatus, onFinalizeAndSpeak, recipeAudioById }) {
     // Uses the URL parameter to find the specific recipe
     const { recipeId } = useParams(); 
     const recipe = recipes.find(r => r.id === recipeId);
@@ -675,15 +630,18 @@ function RecipeDetailPage({ recipes, onGenerateRecipeImage, recipeImages, recipe
                 ))}
               </div>
             )}
-            <div className="media">
-                <div className="media__block">
-                    <video controls src={recipe.videoUrl} />
-                    <span>AI-generated walkthrough</span>
-                </div>
-                <div className="media__block">
-                    <audio controls src={recipe.audioUrl} />
-                    <span>Audio brief</span>
-                </div>
+            {/* Placeholder media removed for cleaner UI */}
+            <div className="recipe-detail__actions">
+              <button
+                type="button"
+                className="outline"
+                onClick={() => onFinalizeAndSpeak(recipe.id)}
+              >
+                🔊 Finalize, Save & Play
+              </button>
+              {recipeAudioById?.[recipe.id] && (
+                <audio controls src={recipeAudioById[recipe.id]} style={{ marginTop: '0.75rem', width: '100%' }} />
+              )}
             </div>
         </section>
     );
@@ -720,6 +678,8 @@ function App() {
   const [adkBusy, setAdkBusy] = useState(false)
   const [adkSummary, setAdkSummary] = useState([])
   const [finalizeId, setFinalizeId] = useState('')
+  const [adkRecipes, setAdkRecipes] = useState([])
+  const [recipeAudioById, setRecipeAudioById] = useState({})
 
   useEffect(() => {
     const fetchDetections = async () => {
@@ -882,7 +842,11 @@ function App() {
         finalize: false,
       })
       const summary = plan?.summary || []
+      const recipesFromPlan = plan?.recipes || []
       setAdkSummary(summary)
+      if (Array.isArray(recipesFromPlan) && recipesFromPlan.length > 0) {
+        setAdkRecipes(recipesFromPlan)
+      }
       if (summary.length > 0) {
         const top = summary.slice(0, 2).map((s) => s.title).join(' and ')
         try {
@@ -924,6 +888,52 @@ function App() {
     } catch (e) {
       console.error('Finalize failed:', e)
       alert(e.message)
+    } finally {
+      setAdkBusy(false)
+    }
+  }
+
+  const buildRecipeSpeechText = (r) => {
+    if (!r) return ''
+    const sections = []
+    if (r.title) sections.push(`${r.title}.`)
+    if (Array.isArray(r.ingredients) && r.ingredients.length > 0) {
+      sections.push('Ingredients:')
+      sections.push(r.ingredients.join(', '))
+    }
+    if (Array.isArray(r.steps) && r.steps.length > 0) {
+      sections.push('Steps:')
+      sections.push(r.steps.map((s, i) => `Step ${i + 1}: ${s}`).join('. '))
+    }
+    return sections.join(' ')
+  }
+
+  // Finalize selected recipe id, prefer finalized recipe data for speech,
+  // fallback to reading saved file, then generate/attach ElevenLabs audio
+  const finalizeAndSpeakRecipe = async (recipeId) => {
+    if (!recipeId) return
+    try {
+      setAdkBusy(true)
+      const fin = await callAdkTool('plan_recipes', {
+        preference: voiceText.trim(),
+        finalize: true,
+        choice_id: recipeId,
+      })
+      let recipeText = buildRecipeSpeechText(fin?.finalized)
+      if (!recipeText) {
+        // Fallback: read saved file
+        const base = 'http://127.0.0.1:8000'
+        const res = await fetch(`${base}/recipes/${encodeURIComponent(recipeId)}`)
+        const data = await res.json()
+        if (data?.recipe) recipeText = buildRecipeSpeechText(data.recipe)
+        if (!recipeText && data?.text) recipeText = data.text
+      }
+      const url = await speakWithElevenLabs(recipeText || 'Your recipe is ready.', { autoplay: true })
+      setRecipeAudioById((prev) => ({ ...prev, [recipeId]: url }))
+      return { audioUrl: url, text: recipeText }
+    } catch (e) {
+      console.error('Finalize and speak failed:', e)
+      throw e
     } finally {
       setAdkBusy(false)
     }
@@ -1054,7 +1064,7 @@ function App() {
       <main className="app">
         
         {/* Navigation Menu */}
-        <nav className="bottom-nav">
+        <nav className="top-nav">
           <Link to="/">📸 Capture</Link>
           <Link to="/recipes">🥗 Recipes</Link>
           <Link to="/inventory">🧊 Inventory</Link>
@@ -1117,7 +1127,7 @@ function App() {
                 aggregatedItems={aggregatedItems}
                 selectedIngredients={selectedIngredients}
                 toggleIngredient={toggleIngredient}
-                recipes={recipes}
+                recipes={adkRecipes.length > 0 ? adkRecipes : recipes}
                 preference={preference}
               />
             } 
@@ -1125,12 +1135,16 @@ function App() {
           {/* Dynamic Recipe Detail Page (uses ID from URL) */}
           <Route 
             path="/recipes/:recipeId" 
-            element={<RecipeDetailPage 
-              recipes={recipes} 
-              onGenerateRecipeImage={handleGenerateRecipeImage}
-              recipeImages={recipeImages}
-              recipeImageStatus={recipeImageStatus}
-            />} 
+            element={
+              <RecipeDetailPage 
+                recipes={adkRecipes.length > 0 ? adkRecipes : recipes} 
+                onGenerateRecipeImage={handleGenerateRecipeImage}
+                recipeImages={recipeImages}
+                recipeImageStatus={recipeImageStatus}
+                onFinalizeAndSpeak={finalizeAndSpeakRecipe}
+                recipeAudioById={recipeAudioById}
+              />
+            } 
           />
           {/* Inventory Page */}
           <Route 

@@ -422,7 +422,7 @@ function RecipesPage({ aggregatedItems, selectedIngredients, toggleIngredient, r
     );
 }
 
-function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus, onGenerateRecipeImage, recipeImages, recipeImageStatus }) {
+function RecipeDetailPage({ recipes, onGenerateRecipeImage, recipeImages, recipeImageStatus }) {
     // Uses the URL parameter to find the specific recipe
     const { recipeId } = useParams(); 
     const recipe = recipes.find(r => r.id === recipeId);
@@ -431,9 +431,6 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
         return <section className="recipe-detail"><h2>Recipe Not Found</h2></section>;
     }
 
-    const status = videoStatus?.[recipe.id]?.state || 'idle'
-    const statusMessage = videoStatus?.[recipe.id]?.message
-    const videos = videoEntries?.[recipe.id] || []
     const imageStatus = recipeImageStatus?.[recipe.id]?.state || 'idle'
     const imageStatusMessage = recipeImageStatus?.[recipe.id]?.message
     const recipeImageEntries = recipeImages?.[recipe.id] || []
@@ -471,14 +468,6 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
             <div className="recipe-detail__actions">
               <button
                 type="button"
-                className="cta"
-                onClick={() => onGenerateVideos(recipe)}
-                disabled={status === 'loading' || !hasSteps}
-              >
-                {status === 'loading' ? 'Generating AI Video…' : 'Generate AI Step Videos'}
-              </button>
-              <button
-                type="button"
                 className="outline"
                 onClick={() => onGenerateRecipeImage(recipe)}
                 disabled={imageStatus === 'loading' || !hasSteps}
@@ -486,9 +475,6 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
                 {imageStatus === 'loading' ? 'Creating Image…' : 'Generate Recipe Image'}
               </button>
             </div>
-            {status === 'error' && statusMessage && (
-              <p className="status-error" style={{ marginTop: '0.75rem' }}>{statusMessage}</p>
-            )}
             {imageStatus === 'error' && imageStatusMessage && (
               <p className="status-error" style={{ marginTop: '0.75rem' }}>{imageStatusMessage}</p>
             )}
@@ -498,16 +484,6 @@ function RecipeDetailPage({ recipes, onGenerateVideos, videoEntries, videoStatus
                   <div key={`${recipe.id}-image-${idx}`} className="recipe-detail__image-card">
                     <p className="recipe-detail__image-step">Step {idx + 1}</p>
                     <img src={entry.url} alt={`Step ${idx + 1} illustration`} />
-                  </div>
-                ))}
-              </div>
-            )}
-            {videos.length > 0 && (
-              <div className="recipe-videos">
-                {videos.map((video, index) => (
-                  <div key={`${recipe.id}-video-${index}`} className="recipe-video">
-                    <p className="recipe-video__step">Step {index + 1}: {video.step}</p>
-                    <video controls src={video.url} />
                   </div>
                 ))}
               </div>
@@ -542,8 +518,6 @@ function App() {
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionError, setDetectionError] = useState(null)
   const [detections, setDetections] = useState([])
-  const [recipeVideos, setRecipeVideos] = useState({})
-  const [recipeVideoStatus, setRecipeVideoStatus] = useState({})
   const [recipeImages, setRecipeImages] = useState({})
   const [recipeImageStatus, setRecipeImageStatus] = useState({})
 
@@ -572,55 +546,6 @@ function App() {
   }, [])
 
   const aggregatedItems = useMemo(() => aggregateDetections(detections), [detections])
-
-  const handleGenerateRecipeVideos = async (recipe) => {
-    const steps = Array.isArray(recipe?.steps) ? recipe.steps : []
-
-    if (steps.length === 0) {
-      setRecipeVideoStatus((prev) => ({
-        ...prev,
-        [recipe.id]: { state: 'error', message: 'This recipe has no steps defined.' },
-      }))
-      return
-    }
-
-    setRecipeVideoStatus((prev) => ({
-      ...prev,
-      [recipe.id]: { state: 'loading' },
-    }))
-
-    try {
-      const response = await fetch(`/api/recipes/${recipe.id}/videos`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ steps }),
-      })
-
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}))
-        throw new Error(errorBody.error || `Video generation failed with status ${response.status}`)
-      }
-
-      const data = await response.json()
-      const videos = Array.isArray(data?.videos) ? data.videos : []
-
-      setRecipeVideos((prev) => ({
-        ...prev,
-        [recipe.id]: videos,
-      }))
-
-      setRecipeVideoStatus((prev) => ({
-        ...prev,
-        [recipe.id]: { state: 'ready' },
-      }))
-    } catch (error) {
-      console.error('Failed to generate recipe videos', error)
-      setRecipeVideoStatus((prev) => ({
-        ...prev,
-        [recipe.id]: { state: 'error', message: error.message || 'Failed to generate videos.' },
-      }))
-    }
-  }
 
   const handleGenerateRecipeImage = async (recipe) => {
     const steps = Array.isArray(recipe?.steps) ? recipe.steps : []
@@ -852,9 +777,6 @@ function App() {
             path="/recipes/:recipeId" 
             element={<RecipeDetailPage 
               recipes={recipes} 
-              onGenerateVideos={handleGenerateRecipeVideos} 
-              videoEntries={recipeVideos} 
-              videoStatus={recipeVideoStatus}
               onGenerateRecipeImage={handleGenerateRecipeImage}
               recipeImages={recipeImages}
               recipeImageStatus={recipeImageStatus}

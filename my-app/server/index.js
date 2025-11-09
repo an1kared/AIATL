@@ -78,69 +78,109 @@ async function generateRecipeVideos(steps = []) {
 
   const accessToken = await getAccessToken();
 
-  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/veo-3.1-generate-preview:predictLongRunning`;
+  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/veo-3.1-generate-preview:predict`;
 
-  const videos = [];
+  const normalizedSteps = Array.isArray(steps)
+    ? steps
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean)
+    : [];
 
-  for (const step of steps) {
-    const prompt = `Cinematic 4K cooking scene: ${step}. Soft lighting, realistic textures, food close-ups.`;
+  if (!normalizedSteps.length) {
+    throw new Error("Non-empty steps array required");
+  }
 
-    let startResponse;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      startResponse = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          instances: [{ prompt }],
-          parameters: {
-            aspectRatio: "16:9",
-            sampleCount: 1,
-            durationSeconds: 6,
-            generateAudio: false,
-            addWatermark: true,
-            resolution: "720p",
+  const firstStep = normalizedSteps[0];
+  const prompt = [
+    "Generate a cinematic 16:9 cooking video for a smart kitchen recipe app.",
+    `Focus on this step: ${firstStep}.`,
+    "Show realistic ingredients, smooth motion, gentle camera movement, and natural kitchen lighting.",
+    "Avoid on-screen text, captions, or human speech. Keep the scene focused solely on preparing the food for this step.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  let response;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        instances: [
+          {
+            prompt,
           },
-        }),
-      });
+        ],
+        parameters: {
+          aspectRatio: "16:9",
+          sampleCount: 1,
+          durationSeconds: 6,
+          generateAudio: false,
+          addWatermark: true,
+          resolution: "720p",
+        },
+      }),
+    });
 
-      if (startResponse.status === 429) {
-        console.warn("⚠️ Quota hit, waiting 30s before retry...");
-        await new Promise((r) => setTimeout(r, 30000));
-        continue;
-      }
+    if ([403, 429, 503].includes(response.status)) {
+      console.warn("⚠️ Veo quota/availability issue, retrying in 30s...");
+      await new Promise((r) => setTimeout(r, 30000));
+      continue;
+    }
+    break;
+  }
 
+  if (!response?.ok) {
+    const body = await response?.text?.().catch(() => "");
+    throw new Error(`Veo request failed: ${response?.status} ${body}`);
+  }
+
+  const data = await response.json();
+  const predictions = Array.isArray(data?.predictions) ? data.predictions : [];
+  if (!predictions.length) {
+    throw new Error("Veo returned no predictions");
+  }
+
+  let videoUrl = "";
+
+  for (const prediction of predictions) {
+    if (prediction?.outputUri) {
+      videoUrl = prediction.outputUri;
       break;
     }
 
-    if (!startResponse.ok) {
-      const body = await startResponse.text().catch(() => "");
-      throw new Error(`Veo start request failed: ${startResponse.status} ${body}`);
-    }
-
-    const data = await startResponse.json();
-    console.log("🎬 Veo operation started:", data.name);
-
-    // Poll until video is ready
-    const result = await pollOperation(data.name, accessToken, location);
-    const predictions = result.predictions || result.output || [];
-
-    let videoUrl;
-    for (const pred of predictions) {
-      if (pred.outputUri) videoUrl = pred.outputUri;
-      if (pred.mediaOutputs) {
-        const vid = pred.mediaOutputs.find((m) => m.format === "VIDEO" && (m.uri || m.gcsUri));
-        if (vid) videoUrl = vid.uri || vid.gcsUri;
+    const mediaOutputs = prediction?.mediaOutputs || [];
+    for (const entry of mediaOutputs) {
+      if (entry?.format === "VIDEO" && (entry?.uri || entry?.gcsUri)) {
+        videoUrl = entry.uri || entry.gcsUri;
+        break;
       }
     }
+    if (videoUrl) break;
 
-    if (!videoUrl) throw new Error("No video URL in Veo result");
-    videos.push({ step, url: videoUrl });
+    if (prediction?.media && Array.isArray(prediction.media)) {
+      const mediaEntry = prediction.media.find((m) => m?.mimeType?.includes("video") && (m?.uri || m?.gcsUri));
+      if (mediaEntry) {
+        videoUrl = mediaEntry.uri || mediaEntry.gcsUri;
+        break;
+      }
+    }
   }
 
-  return videos;
+  if (!videoUrl) {
+    throw new Error("No video URL found in Veo response");
+  }
+
+  return [
+    {
+      step: firstStep,
+      index: 0,
+      url: videoUrl,
+    },
+  ];
 }
 
 async function generateRecipeImage({ title, summary, steps, ingredients }) {
@@ -176,13 +216,34 @@ async function generateRecipeImage({ title, summary, steps, ingredients }) {
 
   for (let idx = 0; idx < normalizedSteps.length; idx += 1) {
     const stepText = normalizedSteps[idx];
+    const completedSteps =
+      idx > 0
+        ? normalizedSteps
+            .slice(0, idx)
+            .map((entry, i) => `Step ${i + 1}: ${entry}`)
+            .join("\n")
+        : "";
+    const upcomingSteps =
+      idx + 1 < normalizedSteps.length
+        ? normalizedSteps
+            .slice(idx + 1)
+            .map((entry, i) => `• Step ${idx + 2 + i}: ${entry}`)
+            .join("\n")
+        : "";
+
     const prompt = [
-      "Create an appetizing cooking scene illustration suitable for a smart kitchen recipe app.",
-      `Recipe title: ${title || "Delicious Dish"}.`,
-      normalizedIngredients.length ? `Available ingredients: ${normalizedIngredients.join(", ")}.` : "",
-      summary ? `Flavor inspiration: ${summary}.` : "",
-      `Depict the dish specifically during step ${idx + 1}: ${stepText}. Show only this stage of the recipe, with realistic ingredients and textures.`,
-      "Use bright natural lighting, clean background, shallow depth of field, and avoid text overlays or watermarks.",
+      "Extend the existing recipe storyboard with the next cooking scene, matching the previous step’s visual style. Make it realistic and don't add any text onto the image.",
+      normalizedIngredients.length ? `Feature only these ingredients: ${normalizedIngredients.join(", ")}.` : "",
+      summary ? `Capture the overall mood (for context only): ${summary}.` : "",
+      completedSteps
+        ? `The scene should reflect that earlier actions are already complete: ${completedSteps}`
+        : "No prior preparation has been done before this moment.",
+      `Illustrate the current cooking action exactly as described here, no more and no less: ${stepText}. Include only the ingredients and motions named.`,
+      upcomingSteps
+        ? `Do NOT foreshadow or show anything from later actions such as: ${upcomingSteps}. Stop before those occur.`
+        : "This is the final action, so the dish may appear finished only if this action explicitly completes it.",
+      "Generate only the food scene—absolutely no text, titles, labels, overlays, side panels, recipe cards, or UI elements anywhere in the frame.",
+      "Use bright natural lighting, clean background, shallow depth of field, and avoid any logos or watermarks.",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -204,7 +265,8 @@ async function generateRecipeImage({ title, summary, steps, ingredients }) {
           parameters: {
             sampleCount: 1,
             aspectRatio: "1:1",
-            negativePrompt: "low quality, distorted, blurry, text, watermark",
+            negativePrompt:
+              "low quality, distorted, blurry, text, typography, lettering, handwriting, printed words, captions, subtitles, labels, signage, packaging text, watermark, UI, interface, logo",
             enhancePrompt: false,
             personGeneration: "allow_all",
             safetySetting: "block_few",
